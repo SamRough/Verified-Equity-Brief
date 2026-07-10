@@ -78,6 +78,7 @@ type SearchPlan = {
   mode: Article["searchMode"];
   provider: "marketaux" | "alphavantage" | "serpapi" | "tavily" | "sina" | "yahoo" | "googleRss";
   symbols?: string[];
+  locale?: BriefLanguage;
 };
 
 type CompanyContext = {
@@ -1044,25 +1045,15 @@ function isFinancialNewsEvent(article: Article, company: CompanyContext) {
   return score >= 7;
 }
 
-function sourcePriority(article: Article, language: BriefLanguage, company: CompanyContext) {
+function sourcePriority(article: Article, _language: BriefLanguage, company: CompanyContext) {
   const haystack = `${article.source} ${article.url} ${article.title}`.toLowerCase();
-  const categoryPriority: Record<BriefLanguage, Record<SourceCategory, number>> = {
-    zh: {
-      "Official / Exchange": 6,
-      Regulator: 6,
-      "Chinese financial media": 7,
-      "HK financial media": 6,
-      "International financial media": 4,
-      "General news": 1,
-    },
-    en: {
-      "Official / Exchange": 6,
-      Regulator: 6,
-      "Chinese financial media": 4,
-      "HK financial media": 5,
-      "International financial media": 6,
-      "General news": 1,
-    },
+  const categoryPriority: Record<SourceCategory, number> = {
+    "Official / Exchange": 6,
+    Regulator: 6,
+    "Chinese financial media": 6,
+    "HK financial media": 6,
+    "International financial media": 6,
+    "General news": 1,
   };
 
   const trustedBoost = REPUTABLE_SOURCE_HINTS.some((hint) => haystack.includes(hint)) ? 2 : 0;
@@ -1070,7 +1061,7 @@ function sourcePriority(article: Article, language: BriefLanguage, company: Comp
   const tierBoost = article.sourceTier === 1 ? 4 : article.sourceTier === 2 ? 2 : 0;
   const financialBoost = Math.min(10, Math.max(0, financialNewsScore(article, company)));
 
-  return categoryPriority[language][article.category] + trustedBoost + relevanceBoost + tierBoost + financialBoost;
+  return categoryPriority[article.category] + trustedBoost + relevanceBoost + tierBoost + financialBoost;
 }
 
 function eventKey(article: Pick<Article, "title" | "snippet" | "content">) {
@@ -1398,13 +1389,13 @@ function isRelevantForCategory(article: Article, company = buildCompanyContext("
   return true;
 }
 
-function isAllowedSource(article: Article, language: BriefLanguage) {
-  return isAllowedUrl(article.url, article.category, language);
+function isAllowedSource(article: Article, _language: BriefLanguage) {
+  return isAllowedUrl(article.url, article.category, _language);
 }
 
-function isAllowedUrl(url: string, category: SourceCategory, language: BriefLanguage) {
+function isAllowedUrl(url: string, category: SourceCategory, _language: BriefLanguage) {
   const allowedDomains = STRICT_CHINESE_SOURCE_DOMAINS[category];
-  if (allowedDomains.length === 0) return language !== "zh";
+  if (allowedDomains.length === 0) return false;
   return matchesDomain(url, allowedDomains);
 }
 
@@ -1448,7 +1439,7 @@ function siteQuery(query: string, domains: string[]) {
 function dedupePlans(plans: SearchPlan[]) {
   const seen = new Set<string>();
   return plans.filter((plan) => {
-    const key = `${plan.provider}|${plan.mode}|${plan.category}|${plan.query}|${plan.symbols?.join(",") ?? ""}`;
+    const key = `${plan.provider}|${plan.mode}|${plan.category}|${plan.locale ?? "shared"}|${plan.query}|${plan.symbols?.join(",") ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1477,15 +1468,6 @@ function yahooFinanceQueries(company: CompanyContext) {
 
 function containsCjk(text: string) {
   return /[\u3400-\u9fff]/.test(text);
-}
-
-function localizedPrimaryName(company: CompanyContext, language: BriefLanguage) {
-  if (language === "zh") {
-    if (containsCjk(company.input)) return company.input;
-    return company.aliases.find((alias) => containsCjk(alias)) ?? company.displayName;
-  }
-
-  return company.displayName;
 }
 
 type CompanyResolution = {
@@ -1723,14 +1705,15 @@ function mergeCompanyResolution(base: CompanyContext, resolution: CompanyResolut
   };
 }
 
-async function resolveCompanyContext(query: string, language: BriefLanguage) {
-  const key = `${language}:${query.trim().toLowerCase()}`;
+async function resolveCompanyContext(query: string) {
+  const key = query.trim().toLowerCase();
   const cached = companyResolutionCache.get(key);
   if (cached) return cached;
 
   const promise = (async () => {
     const base = buildCompanyContext(query);
-    const resolution = await resolveCompanyExpansionWithDeepSeek(query, language, base);
+    const entityLanguage: BriefLanguage = containsCjk(query) ? "zh" : "en";
+    const resolution = await resolveCompanyExpansionWithDeepSeek(query, entityLanguage, base);
     return mergeCompanyResolution(base, resolution);
   })();
 
@@ -1751,103 +1734,24 @@ function compactNotes(notes: Array<string | null | undefined>) {
   return notes.filter((note): note is string => Boolean(note));
 }
 
-function buildSearchPlans(company: CompanyContext, language: BriefLanguage): SearchPlan[] {
+function buildSearchPlans(company: CompanyContext): SearchPlan[] {
   const primary = company.displayName;
-  const localizedPrimary = localizedPrimaryName(company, language);
+  const zhPrimary = company.isTencent
+    ? "腾讯"
+    : company.aliases.find((alias) => containsCjk(alias)) ?? company.displayName;
   const expanded = company.aliases.join(" OR ");
   const tickerAliases = [company.usTicker, company.hkTicker, company.cnTicker].filter((item): item is string => Boolean(item));
   const financeApiSymbols = tickerSymbolsForFinanceApis(company);
-  const marketauxSearch =
-    language === "zh"
-      ? `${[primary, ...company.aliases, ...tickerAliases].slice(0, 8).join(" OR ")} 财经 OR 业绩 OR 回购 OR 监管 OR AI OR 合作`
-      : `${[primary, ...company.aliases, ...tickerAliases].slice(0, 8).join(" OR ")} earnings OR revenue OR buyback OR regulation OR AI OR deal`;
+  const marketauxEntities = [primary, ...company.aliases, ...tickerAliases].slice(0, 8).join(" OR ");
+  const marketauxSearchZh = `${marketauxEntities} 财经 OR 业绩 OR 回购 OR 监管 OR AI OR 合作`;
+  const marketauxSearchEn = `${marketauxEntities} earnings OR revenue OR buyback OR regulation OR AI OR deal`;
   const zhAliases = company.isTencent ? ["腾讯", "腾讯控股", "00700", "0700.HK"] : [primary, ...company.aliases, ...tickerAliases];
   const enAliases = company.isTencent ? ["Tencent", "Tencent Holdings", "0700.HK", "TCEHY"] : [primary, expanded];
   const zhNoiseExclusions = "-百家号 -搜狐号 -网易号 -腾讯新闻 -高考 -志愿 -剑南春";
   const alphaTicker = alphaVantageTicker(company);
   const yahooQueries = yahooFinanceQueries(company);
 
-  if (language === "zh") {
-    const zhPrimary = company.isTencent ? "腾讯" : localizedPrimary;
-    const plans: SearchPlan[] = [
-      makePlan(marketauxSearch, "Chinese financial media", "Marketaux", 50, undefined, financeApiSymbols),
-      ...(alphaTicker
-        ? [makePlan(alphaTicker, "International financial media", "Alpha Vantage", 50, undefined, [alphaTicker])]
-        : []),
-      ...[company.usTicker, company.hkTicker, company.cnTicker]
-        .filter((ticker): ticker is string => Boolean(ticker))
-        .map((ticker) => makePlan(ticker, "Chinese financial media", "Sina Finance", 30, CHINESE_FINANCIAL_DOMAINS)),
-      ...yahooQueries.map((item) =>
-        makePlan(item, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
-      ),
-      // Personal-demo discovery only: RSS results are decoded to the original publisher URL,
-      // then go through the same source, relevance, date, and tier gates as every other result.
-      makePlan(`${zhPrimary} 财经 新闻`, "Chinese financial media", "Google News RSS", 14, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(
-        `${zhPrimary} 公司 业绩 回购 监管 产品 合作`,
-        "Chinese financial media",
-        "Google News RSS",
-        14,
-        CHINESE_FINANCIAL_DOMAINS,
-      ),
-      makePlan(`${primary} company news`, "International financial media", "Google News RSS", 10, INTERNATIONAL_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 新闻`, "Chinese financial media", "Google News", 20, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhAliases.join(" ")} 最新 新闻 ${zhNoiseExclusions}`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(
-        siteQuery(`${zhPrimary} 最新 新闻`, ["stcn.com", "cls.cn", "yicai.com", "caixin.com", "cnstock.com"]),
-        "Chinese financial media",
-        "Google Web",
-        20,
-        CHINESE_FINANCIAL_DOMAINS,
-      ),
-      makePlan(
-        siteQuery(`${zhPrimary} 财经 新闻`, ["finance.eastmoney.com", "finance.sina.com.cn", "cj.sina.cn", "finance.qq.com", "finance.sohu.com"]),
-        "Chinese financial media",
-        "Google Web",
-        20,
-        CHINESE_FINANCIAL_DOMAINS,
-      ),
-      makePlan(
-        siteQuery(`${zhPrimary} 控股 新闻`, ["21jingji.com", "nbd.com.cn", "jiemian.com", "thepaper.cn", "wallstreetcn.com"]),
-        "Chinese financial media",
-        "Google Web",
-        20,
-        CHINESE_FINANCIAL_DOMAINS,
-      ),
-      makePlan(`${zhPrimary} 财经 证券时报 财新 第一财经 财联社`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 业绩 营收 利润 指引`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 监管 调查 处罚 合规`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 合作 订单 供应链 产品 发布`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 回购 分红 收购 投资 融资`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
-      ...(company.isTencent
-        ? [
-            makePlan(`${zhPrimary} 长鑫存储 CXMT 内存 采购`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
-            makePlan(`${zhPrimary} 长鑫存储 CXMT 内存 采购`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
-          ]
-        : []),
-      makePlan(`${zhPrimary} 公司公告 交易所 回购`, "Official / Exchange", "Google Web", 12, OFFICIAL_EXCHANGE_DOMAINS),
-      makePlan(`${zhPrimary} 监管 审批 游戏 AI`, "Regulator", "Google Web", 10, REGULATOR_DOMAINS),
-      makePlan(`${zhPrimary} 股票 新闻`, "Chinese financial media", "Bing News", 20, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} ${company.hkTicker ?? ""} ${company.cnTicker ?? ""} ${company.usTicker ?? ""} 股票 新闻`, "HK financial media", "Google News", 16, HK_FINANCIAL_DOMAINS),
-      makePlan(`${enAliases.join(" OR ")}`, "International financial media", "Google News", 16, INTERNATIONAL_FINANCIAL_DOMAINS),
-      makePlan(
-        siteQuery(`${primary} latest company news earnings regulation deal product`, ["bloomberg.com", "reuters.com", "cnbc.com", "finance.yahoo.com", "businesstimes.com.sg"]),
-        "International financial media",
-        "Google Web",
-        20,
-        INTERNATIONAL_FINANCIAL_DOMAINS,
-      ),
-      makePlan(`${primary} stock news earnings AI gaming regulation`, "International financial media", "Google Web", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 最新 财经 新闻`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} 公司新闻 业绩 监管 产品 合作`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${zhPrimary} ${company.hkTicker ?? ""} ${company.cnTicker ?? ""} ${company.usTicker ?? ""} 核心财经新闻`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
-      makePlan(`${primary} latest company news earnings regulation product deal`, "International financial media", "Tavily", 10, INTERNATIONAL_FINANCIAL_DOMAINS),
-    ];
-    return dedupePlans(plans);
-  }
-
-  return dedupePlans([
-    makePlan(marketauxSearch, "International financial media", "Marketaux", 50, undefined, financeApiSymbols),
+  const sharedPlans: SearchPlan[] = [
     ...(alphaTicker
       ? [makePlan(alphaTicker, "International financial media", "Alpha Vantage", 50, undefined, [alphaTicker])]
       : []),
@@ -1857,6 +1761,39 @@ function buildSearchPlans(company: CompanyContext, language: BriefLanguage): Sea
     ...yahooQueries.map((item) =>
       makePlan(item, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
     ),
+  ];
+
+  const chineseDiscoveryPlans: SearchPlan[] = [
+    makePlan(marketauxSearchZh, "Chinese financial media", "Marketaux", 50, undefined, financeApiSymbols),
+    // Personal-demo discovery only: RSS links are decoded to original publishers,
+    // then pass the same source, relevance, date, and tier gates as every result.
+    makePlan(`${zhPrimary} 财经 新闻`, "Chinese financial media", "Google News RSS", 14, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 公司 业绩 回购 监管 产品 合作`, "Chinese financial media", "Google News RSS", 14, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 新闻`, "Chinese financial media", "Google News", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhAliases.join(" ")} 最新 新闻 ${zhNoiseExclusions}`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(siteQuery(`${zhPrimary} 最新 新闻`, ["stcn.com", "cls.cn", "yicai.com", "caixin.com", "cnstock.com"]), "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(siteQuery(`${zhPrimary} 财经 新闻`, ["finance.eastmoney.com", "finance.sina.com.cn", "cj.sina.cn", "finance.qq.com", "finance.sohu.com"]), "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(siteQuery(`${zhPrimary} 控股 新闻`, ["21jingji.com", "nbd.com.cn", "jiemian.com", "thepaper.cn", "wallstreetcn.com"]), "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 财经 证券时报 财新 第一财经 财联社`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 业绩 营收 利润 指引`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 监管 调查 处罚 合规`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 合作 订单 供应链 产品 发布`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 回购 分红 收购 投资 融资`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
+    ...(company.isTencent ? [
+      makePlan(`${zhPrimary} 长鑫存储 CXMT 内存 采购`, "Chinese financial media", "Google News", 16, CHINESE_FINANCIAL_DOMAINS),
+      makePlan(`${zhPrimary} 长鑫存储 CXMT 内存 采购`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
+    ] : []),
+    makePlan(`${zhPrimary} 公司公告 交易所 回购`, "Official / Exchange", "Google Web", 12, OFFICIAL_EXCHANGE_DOMAINS),
+    makePlan(`${zhPrimary} 监管 审批 游戏 AI`, "Regulator", "Google Web", 10, REGULATOR_DOMAINS),
+    makePlan(`${zhPrimary} 股票 新闻`, "Chinese financial media", "Bing News", 20, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} ${company.hkTicker ?? ""} ${company.cnTicker ?? ""} ${company.usTicker ?? ""} 股票 新闻`, "HK financial media", "Google News", 16, HK_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 最新 财经 新闻`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} 公司新闻 业绩 监管 产品 合作`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
+    makePlan(`${zhPrimary} ${company.hkTicker ?? ""} ${company.cnTicker ?? ""} ${company.usTicker ?? ""} 核心财经新闻`, "Chinese financial media", "Tavily", 12, CHINESE_FINANCIAL_DOMAINS),
+  ];
+
+  const internationalDiscoveryPlans: SearchPlan[] = [
+    makePlan(marketauxSearchEn, "International financial media", "Marketaux", 50, undefined, financeApiSymbols),
     makePlan(`${primary} company news`, "International financial media", "Google News RSS", 14, INTERNATIONAL_FINANCIAL_DOMAINS),
     makePlan(
       `${primary} earnings deal product regulation`,
@@ -1888,6 +1825,12 @@ function buildSearchPlans(company: CompanyContext, language: BriefLanguage): Sea
     makePlan(`${primary} official investor relations news`, "Official / Exchange", "Google Web", 10, OFFICIAL_EXCHANGE_DOMAINS),
     makePlan(`${primary} latest stock news`, "International financial media", "Tavily", 12, INTERNATIONAL_FINANCIAL_DOMAINS),
     makePlan(`${primary} company news earnings regulation product deal`, "International financial media", "Tavily", 12, INTERNATIONAL_FINANCIAL_DOMAINS),
+  ];
+
+  return dedupePlans([
+    ...sharedPlans,
+    ...chineseDiscoveryPlans.map((plan) => ({ ...plan, locale: "zh" as const })),
+    ...internationalDiscoveryPlans.map((plan) => ({ ...plan, locale: "en" as const })),
   ]);
 }
 
@@ -1945,8 +1888,8 @@ function providerFailureMessage(error: unknown) {
 }
 
 export async function searchTencentNews(query: string, range: TimeRange, language: BriefLanguage) {
-  const company = await resolveCompanyContext(query, language);
-  const searches = buildSearchPlans(company, language);
+  const company = await resolveCompanyContext(query);
+  const searches = buildSearchPlans(company);
   const marketauxApiKey = process.env.MARKETAUX_API_KEY;
   const alphaVantageApiKey = process.env.ALPHAVANTAGE_API_KEY;
   const serpApiKey = process.env.SERPAPI_API_KEY;
@@ -1996,7 +1939,7 @@ async function searchWithMarketaux(
   const responseSettled = await runSettledInBatches(
     searches,
     async (plan) => {
-      const requests = buildMarketauxUrls(plan, range, language, apiKey, company);
+      const requests = buildMarketauxUrls(plan, range, plan.locale ?? language, apiKey, company);
       const responses = await Promise.all(
         requests.map(async (url) => {
           const response = await fetch(url, {
@@ -2431,7 +2374,7 @@ async function searchWithSerpApi(
     const batch = searches.slice(index, index + 3);
     const responseSettled = await Promise.allSettled(
       batch.map(async (plan) => {
-      const response = await fetch(buildSerpApiUrl(plan, range, language, apiKey), {
+      const response = await fetch(buildSerpApiUrl(plan, range, plan.locale ?? language, apiKey), {
         cache: "no-store",
         signal: AbortSignal.timeout(15000),
       });
@@ -2537,11 +2480,12 @@ async function searchWithGoogleNewsRss(
   const responseSettled = await runSettledInBatches(
     searches,
     async (plan): Promise<RawResult[]> => {
+      const searchLocale = plan.locale ?? language;
       const params = new URLSearchParams({
         q: `${plan.query} when:${rangeWhen(range)}`.trim(),
-        hl: language === "zh" ? "zh-CN" : "en-US",
-        gl: language === "zh" ? "CN" : "US",
-        ceid: language === "zh" ? "CN:zh-Hans" : "US:en",
+        hl: searchLocale === "zh" ? "zh-CN" : "en-US",
+        gl: searchLocale === "zh" ? "CN" : "US",
+        ceid: searchLocale === "zh" ? "CN:zh-Hans" : "US:en",
       });
       const response = await fetch(`https://news.google.com/rss/search?${params.toString()}`, {
         headers: { "User-Agent": "Mozilla/5.0 VerifiedEquityBrief/0.1" },
@@ -2551,7 +2495,7 @@ async function searchWithGoogleNewsRss(
       if (!response.ok) throw new Error(`Google News RSS failed: ${response.status}`);
 
       const items = parseGoogleNewsRss(await response.text())
-        .filter((item) => isGoogleRssPublisherAllowed(item, plan, language))
+        .filter((item) => isGoogleRssPublisherAllowed(item, plan, searchLocale))
         .slice(0, plan.maxResults ?? 12);
       if (items.length === 0) return [];
       const decoded = await decodeGoogleNewsUrls(items.map((item) => item.googleUrl));
@@ -2560,7 +2504,7 @@ async function searchWithGoogleNewsRss(
         const url = decoded[index]?.status ? decoded[index]?.decoded_url : null;
         if (!url) return [];
         const category = categoryForUrl(url, plan.category);
-        if (!isAllowedUrl(url, category, language)) return [];
+        if (!isAllowedUrl(url, category, searchLocale)) return [];
         if (plan.includeDomains?.length && !matchesDomain(url, plan.includeDomains)) return [];
         return [{
           title: item.title,
@@ -2833,14 +2777,14 @@ async function normalizeAndFilterResults(
     })
     .map((article) => {
       const date = dateEvaluation(article, range);
-      if (!date.verified && language === "zh") dateUnverifiedSources += 1;
+      if (!date.verified) dateUnverifiedSources += 1;
       return {
         ...article,
         dateStatus: date.verified ? "verified" : "unverified",
         usableForClaims: date.verified && date.insideRange,
       } satisfies Article;
     })
-    .filter((article) => article.usableForClaims || (language === "zh" && article.dateStatus === "unverified"))
+    .filter((article) => article.usableForClaims)
     .sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company));
 
   const clustered = assignEventClusters(filteredBeforeDiversification, language, company);

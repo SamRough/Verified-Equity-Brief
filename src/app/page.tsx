@@ -37,7 +37,7 @@ const copy = {
   en: {
     company: "Company or ticker",
     timeRange: "Time range",
-    language: "Language",
+    language: "Brief language",
     generate: "Search News",
     generating: "Verifying news...",
     noCitedClaims: "No cited claims available.",
@@ -96,7 +96,7 @@ const copy = {
   zh: {
     company: "公司或股票代码",
     timeRange: "时间范围",
-    language: "语言",
+    language: "简报语言",
     generate: "查找可信新闻",
     generating: "正在验证新闻...",
     noCitedClaims: "暂无带引用的结论。",

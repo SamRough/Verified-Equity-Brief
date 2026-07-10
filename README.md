@@ -10,9 +10,9 @@ AI research tools can hallucinate: they may invent news, mix old stories into a 
 
 - Uses finance-first retrieval: Marketaux and Alpha Vantage are the preferred news APIs; Yahoo Finance, Sina Finance, Google News RSS discovery (local personal demo only), Chinese/HK financial media searches, Tavily, and SerpAPI are fallback or supplemental sources.
 - Uses source-bucketed retrieval for official/exchange announcements, regulators, Chinese financial media, HK financial media, international financial media, and finance API feeds.
-- Chinese mode uses a strict serious-source allowlist and rejects Baijiahao, portals, forums, social posts, search pages, and content-farm reposts.
+- Chinese-source discovery uses a strict serious-source allowlist and rejects Baijiahao, portals, forums, social posts, search pages, and content-farm reposts.
 - Normalizes and filters results for company relevance, duplicate URLs, low-quality sources, event duplication, and selected time range.
-- Supports English and Simplified Chinese brief generation. Chinese mode prioritizes strict finance-source filtering over generic web results.
+- The language selector controls brief presentation only. Every request builds one evidence pool from official, Chinese/HK, and international finance sources before rendering the brief in English or Simplified Chinese.
 - Shows the news candidates, event clusters, provider diagnostics, and evidence quality before the generated brief.
 - Sends only verified, claim-usable article data to the language model.
 - Requires structured JSON with article ID citations.

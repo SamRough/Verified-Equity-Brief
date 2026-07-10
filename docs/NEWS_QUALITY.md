@@ -12,6 +12,7 @@ Verified Equity Brief is a source-verifiable news intelligence workflow. It is n
 4. A source must pass the serious-source allowlist, company relevance test, article-level noise rules, and selected-date-window test before it can support a claim.
 5. Similar headline events are clustered before the LLM sees them. Selection is capped per event and per publisher to reduce syndicated-news repetition.
 6. Provider diagnostics distinguish `used`, `empty`, `skipped`, and `failed`; a configured API key never appears as a successful search when it returned no articles or the provider rejected the request.
+7. Brief language never narrows the evidence pool. Chinese and English rendering both use the same date-verified, tier-qualified source set; locale-specific discovery queries only broaden recall.
 
 ## Admission rules
 

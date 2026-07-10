@@ -70,6 +70,7 @@ function validateBrief(brief) {
 }
 
 let failed = false;
+const completedBriefs = new Map();
 for (const testCase of cases) {
   const response = await fetch(`${baseUrl}/api/brief`, {
     method: "POST",
@@ -81,9 +82,42 @@ for (const testCase of cases) {
   const failures = response.ok ? validateBrief(brief) : [brief.error ?? `HTTP ${response.status}`];
   const outcome = failures.length === 0 ? "PASS" : "FAIL";
   console.log(`${outcome} | ${testCase.query} | ${brief.status} | ${brief.sourceVerification?.articlesUsed ?? 0} verified sources`);
+  completedBriefs.set(`${testCase.query}:${testCase.language}`, brief);
   if (failures.length) {
     failed = true;
     for (const failure of [...new Set(failures)]) console.log(`  - ${failure}`);
+  }
+}
+
+// Brief language changes wording, not the underlying evidence policy. Live search
+// can reorder a small number of results between calls, so require a meaningful
+// overlap rather than byte-for-byte equality.
+const chineseTencent = completedBriefs.get("Tencent:zh");
+let englishTencent = completedBriefs.get("Tencent:en");
+if (!englishTencent) {
+  const response = await fetch(`${baseUrl}/api/brief`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "Tencent", language: "en", range: "last7" }),
+    signal: AbortSignal.timeout(120000),
+  });
+  englishTencent = await response.json();
+  if (!response.ok) {
+    failed = true;
+    console.log("FAIL | Tencent language parity | English request failed");
+  }
+}
+
+if (chineseTencent?.status === "ok" && englishTencent?.status === "ok") {
+  const zhUrls = new Set(chineseTencent.sources.map((source) => source.url));
+  const enUrls = new Set(englishTencent.sources.map((source) => source.url));
+  const sharedUrls = [...zhUrls].filter((url) => enUrls.has(url));
+  const overlap = sharedUrls.length / Math.max(zhUrls.size, enUrls.size, 1);
+  if (overlap < 0.5) {
+    failed = true;
+    console.log(`FAIL | Tencent language parity | ${(overlap * 100).toFixed(0)}% shared original URLs`);
+  } else {
+    console.log(`PASS | Tencent language parity | ${(overlap * 100).toFixed(0)}% shared original URLs`);
   }
 }
 
