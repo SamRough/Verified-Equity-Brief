@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import type { BriefLanguage, ResearchBrief, SummaryBullet, TimeRange } from "@/lib/types";
 
 const ranges: { value: TimeRange; label: Record<BriefLanguage, string> }[] = [
@@ -15,25 +15,47 @@ const languages: { value: BriefLanguage; label: string }[] = [
   { value: "zh", label: "中文" },
 ];
 
+function briefTitle(range: TimeRange, language: BriefLanguage) {
+  const titles: Record<BriefLanguage, Record<TimeRange, string>> = {
+    en: {
+      today: "Today’s News Brief",
+      week: "This Week’s News Brief",
+      last7: "7-Day News Brief",
+      last30: "30-Day News Brief",
+    },
+    zh: {
+      today: "今日新闻简报",
+      week: "本周新闻简报",
+      last7: "过去 7 天新闻简报",
+      last30: "过去 30 天新闻简报",
+    },
+  };
+  return titles[language][range];
+}
+
 const copy = {
   en: {
     company: "Company or ticker",
     timeRange: "Time range",
     language: "Language",
-    generate: "Find Verified News",
+    generate: "Search News",
     generating: "Verifying news...",
     noCitedClaims: "No cited claims available.",
     insufficient: "Insufficient verified sources found.",
-    executiveSummary: "Generated News Brief",
-    sourceVerification: "Evidence Quality",
-    keyNews: "Verified News Highlights",
-    investmentImplications: "News Follow-up",
+    sourceVerification: "Verification status",
+    keyNews: "All Verified News",
+    investmentImplications: "Research Follow-up",
     positiveFactors: "Constructive developments",
     negativeFactors: "Pressure points",
     watchItems: "Watch items",
-    sourceList: "News Candidates",
+    sourceList: "Verified source library",
     eventClusters: "Event Clusters",
-    searchStrategy: "Search Strategy",
+    searchStrategy: "Retrieval audit",
+    auditTrail: "Audit trail",
+    auditHint: "Source library, event grouping, and provider diagnostics",
+    verifiedSources: "verified sources",
+    events: "events",
+    cited: "cited claims",
     sources: "sources",
     latest: "latest",
     representative: "representative",
@@ -48,6 +70,9 @@ const copy = {
     eventsFound: "Events found",
     searchQueriesRun: "Search queries",
     sourceTier: "Source tier",
+    provider: "Provider",
+    status: "Status",
+    results: "results",
     tier1: "Tier 1",
     tier2: "Tier 2",
     tier3: "Tier 3",
@@ -76,16 +101,20 @@ const copy = {
     generating: "正在验证新闻...",
     noCitedClaims: "暂无带引用的结论。",
     insufficient: "未找到足够的可验证来源。",
-    executiveSummary: "基于新闻生成的简报",
-    sourceVerification: "证据质量",
-    keyNews: "可信新闻重点",
-    investmentImplications: "新闻跟踪要点",
+    sourceVerification: "验证状态",
+    keyNews: "全部已验证新闻",
+    investmentImplications: "研究跟踪",
     positiveFactors: "积极进展",
     negativeFactors: "压力因素",
     watchItems: "观察事项",
-    sourceList: "新闻候选列表",
+    sourceList: "已验证来源库",
     eventClusters: "新闻事件簇",
-    searchStrategy: "搜索策略",
+    searchStrategy: "检索审计",
+    auditTrail: "审计明细",
+    auditHint: "来源库、事件归类与检索接口记录",
+    verifiedSources: "已验证来源",
+    events: "新闻事件",
+    cited: "带引用结论",
     sources: "来源",
     latest: "最新日期",
     representative: "代表来源",
@@ -100,6 +129,9 @@ const copy = {
     eventsFound: "事件数量",
     searchQueriesRun: "搜索查询数",
     sourceTier: "来源层级",
+    provider: "来源接口",
+    status: "状态",
+    results: "结果",
     tier1: "一级",
     tier2: "二级",
     tier3: "三级",
@@ -188,21 +220,18 @@ function displayTier(tier: number, language: BriefLanguage) {
   return `Tier ${tier}`;
 }
 
+function displaySearchStatus(status: ResearchBrief["searchDiagnostics"][number]["status"], language: BriefLanguage) {
+  if (!status || language === "en") return status;
+  if (status === "used") return "已返回结果";
+  if (status === "empty") return "无结果";
+  if (status === "skipped") return "未配置";
+  return "失败";
+}
+
 function tierClassName(tier: number) {
   if (tier === 1) return "border-teal-300/40 bg-teal-300/10 text-teal-100";
   if (tier === 2) return "border-sky-300/35 bg-sky-300/10 text-sky-100";
   return "border-amber-300/35 bg-amber-300/10 text-amber-100";
-}
-
-function displayTierDescription(tier: number, language: BriefLanguage) {
-  if (language === "zh") {
-    if (tier === 1) return "主流财经 / 官方来源";
-    if (tier === 2) return "可信财经 / 科技媒体";
-    return "行情数据 / 聚合与辅助来源";
-  }
-  if (tier === 1) return "Primary financial / official source";
-  if (tier === 2) return "Reputable financial / tech media";
-  return "Market data / aggregation source";
 }
 
 function Panel({
@@ -215,27 +244,30 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={`rounded-lg border border-slate-700 bg-slate-900/70 p-5 shadow-sm ${className}`}>
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</h2>
+    <section className={`border border-slate-700 bg-slate-900/70 p-5 shadow-sm ${className}`}>
+      <h2 className="mb-4 text-sm font-semibold uppercase tracking-[0.14em] text-slate-300">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function EvidenceMetric({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div className="min-w-0 border-l border-slate-700 pl-3 first:border-l-0 first:pl-0">
+      <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">{label}</p>
+      <p className={`mt-1 text-xl font-semibold ${accent ? "text-teal-200" : "text-slate-100"}`}>{value}</p>
+    </div>
   );
 }
 
 export default function Home() {
   const [query, setQuery] = useState("Tencent");
   const [range, setRange] = useState<TimeRange>("last7");
+  const [briefRange, setBriefRange] = useState<TimeRange | null>(null);
   const [language, setLanguage] = useState<BriefLanguage>("en");
   const [brief, setBrief] = useState<ResearchBrief | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
-  const confidenceColor = useMemo(() => {
-    const score = brief?.sourceVerification.confidenceScore ?? 0;
-    if (score >= 70) return "text-teal-200";
-    if (score >= 40) return "text-amber-100";
-    return "text-red-200";
-  }, [brief]);
 
   const t = copy[language];
 
@@ -244,6 +276,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setBrief(null);
+    setBriefRange(null);
 
     try {
       const response = await fetch("/api/brief", {
@@ -256,6 +289,7 @@ export default function Home() {
         throw new Error(data.error ?? "Failed to generate brief.");
       }
       setBrief(data);
+      setBriefRange(range);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate brief.");
     } finally {
@@ -265,19 +299,19 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#071019] text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <header className="border-b border-slate-800 pb-5">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
+        <header className="border-b border-slate-800 pb-4">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-teal-200">{t.liveDemo}</p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-normal text-white sm:text-4xl">
-                Equity Research Copilot
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-200">{t.liveDemo}</p>
+              <h1 className="mt-1 text-3xl font-semibold tracking-normal text-white sm:text-4xl">
+                Verified Equity Brief
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-slate-400">
                 {t.subtitle}
               </p>
             </div>
-            <div className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+            <div className="w-fit border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300">
               {t.badge}
             </div>
           </div>
@@ -285,7 +319,7 @@ export default function Home() {
 
         <form
           onSubmit={generate}
-          className="grid gap-3 rounded-lg border border-slate-700 bg-slate-900/80 p-4 shadow-sm md:grid-cols-[1fr_170px_150px_160px]"
+          className="grid gap-3 border border-slate-700 bg-slate-900/80 p-4 shadow-sm md:grid-cols-[1fr_155px_130px_164px]"
         >
           <label className="flex flex-col gap-2">
             <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.company}</span>
@@ -327,7 +361,7 @@ export default function Home() {
           <button
             type="submit"
             disabled={loading}
-            className="mt-auto h-11 rounded bg-teal-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
+            className="mt-auto h-11 whitespace-nowrap rounded bg-teal-300 px-4 text-sm font-semibold leading-none text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
           >
             {loading ? t.generating : t.generate}
           </button>
@@ -338,7 +372,7 @@ export default function Home() {
         ) : null}
 
         {loading ? (
-          <div className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">
+          <div className="grid gap-4 lg:grid-cols-[1.5fr_0.8fr]">
             <div className="h-64 animate-pulse rounded-lg border border-slate-800 bg-slate-900" />
             <div className="h-64 animate-pulse rounded-lg border border-slate-800 bg-slate-900" />
           </div>
@@ -352,92 +386,8 @@ export default function Home() {
               </div>
             ) : null}
 
-            <Panel title={t.sourceList}>
-              <div className="grid gap-3 md:grid-cols-2">
-                {brief.sources.map((source) => (
-                  <a
-                    key={source.id}
-                    href={source.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded border border-slate-700 bg-slate-950 p-3 text-sm hover:border-teal-300/50"
-                  >
-                    <p className="font-semibold text-slate-100">
-                      S{source.id}: {source.title}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {source.publishedDate ?? t.dateNotProvided} | {source.source}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {t.dateSource}: {source.dateSource}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {t.searchMode}: {source.searchMode}
-                    </p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${tierClassName(source.sourceTier)}`}>
-                        {displayTier(source.sourceTier, language)}
-                      </span>
-                      <span className="text-xs text-slate-500">{displayTierDescription(source.sourceTier, language)}</span>
-                    </div>
-                    {source.dateStatus === "unverified" || !source.usableForClaims ? (
-                      <p className="mt-2 text-xs text-amber-100">
-                        {source.dateStatus === "unverified" ? t.dateUnverified : null}
-                        {!source.usableForClaims ? ` | ${t.notUsedForClaims}` : null}
-                      </p>
-                    ) : null}
-                    <p className="mt-2 text-xs text-slate-400">
-                      {t.category}: {source.category}
-                    </p>
-                  </a>
-                ))}
-              </div>
-            </Panel>
-
-            <Panel title={t.eventClusters}>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {brief.eventClusters.map((cluster) => (
-                  <div key={cluster.id} className="rounded border border-slate-700 bg-slate-950 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-slate-100">{cluster.label}</h3>
-                      <span className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300">
-                        {cluster.sourceCount} {t.sources}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-500">
-                      {t.latest}: {cluster.latestDate ?? t.dateNotProvided}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {t.representative}: {cluster.representativeSource}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-                      <span className="rounded border border-teal-300/30 bg-teal-300/10 px-2 py-0.5 text-teal-100">
-                        {displayTier(1, language)} {cluster.tier1Count}
-                      </span>
-                      <span className="rounded border border-sky-300/30 bg-sky-300/10 px-2 py-0.5 text-sky-100">
-                        {displayTier(2, language)} {cluster.tier2Count}
-                      </span>
-                      <span className="rounded border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-amber-100">
-                        {displayTier(3, language)} {cluster.tier3Count}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-1">
-                      {cluster.articleIds.slice(0, 6).map((articleId) => (
-                        <span
-                          key={articleId}
-                          className="rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-300"
-                        >
-                          S{articleId}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Panel>
-
-            <div className="grid gap-5 lg:grid-cols-[1.45fr_0.75fr]">
-              <Panel title={t.executiveSummary}>
+            <div className="grid gap-5 lg:grid-cols-[1.5fr_0.8fr]">
+              <Panel title={briefTitle(briefRange ?? range, language)}>
                 <BulletList
                   items={brief.executiveSummary}
                   emptyLabel={t.noCitedClaims}
@@ -446,12 +396,20 @@ export default function Home() {
               </Panel>
 
               <Panel title={t.sourceVerification}>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <Metric label={t.articlesRetrieved} value={brief.sourceVerification.articlesRetrieved} />
-                  <Metric label={t.articlesUsed} value={brief.sourceVerification.articlesUsed} />
-                  <Metric label={t.duplicatesRemoved} value={brief.sourceVerification.duplicatesRemoved} />
-                  <Metric label={t.citedClaims} value={brief.sourceVerification.claimsWithCitations} />
-                  <Metric label={t.unverifiedRemoved} value={brief.sourceVerification.unverifiedClaimsRemoved} />
+                <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4">
+                  <EvidenceMetric label={t.verifiedSources} value={brief.sourceVerification.articlesUsed} accent />
+                  <EvidenceMetric label={t.events} value={brief.sourceVerification.eventsFound ?? brief.eventClusters.length} />
+                  <EvidenceMetric label={t.cited} value={brief.sourceVerification.claimsWithCitations} />
+                  <EvidenceMetric label={t.confidence} value={brief.sourceVerification.confidenceScore} />
+                </div>
+                <details className="mt-5 border-t border-slate-800 pt-3">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-400 hover:text-teal-200">
+                    {t.auditTrail}
+                  </summary>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                    <Metric label={t.articlesRetrieved} value={brief.sourceVerification.articlesRetrieved} />
+                    <Metric label={t.duplicatesRemoved} value={brief.sourceVerification.duplicatesRemoved} />
+                    <Metric label={t.unverifiedRemoved} value={brief.sourceVerification.unverifiedClaimsRemoved} />
                   {typeof brief.sourceVerification.dateUnverifiedSources === "number" ? (
                     <Metric label={t.dateUnverified} value={brief.sourceVerification.dateUnverifiedSources} />
                   ) : null}
@@ -476,14 +434,9 @@ export default function Home() {
                   {typeof brief.sourceVerification.searchQueriesRun === "number" ? (
                     <Metric label={t.searchQueriesRun} value={brief.sourceVerification.searchQueriesRun} />
                   ) : null}
-                  <div className="rounded border border-slate-700 bg-slate-950 p-3">
-                    <p className="text-xs uppercase tracking-[0.12em] text-slate-500">{t.confidence}</p>
-                    <p className={`mt-1 text-2xl font-semibold ${confidenceColor}`}>
-                      {brief.sourceVerification.confidenceScore}
-                    </p>
                   </div>
-                </div>
-                <ul className="mt-4 space-y-2 text-xs leading-5 text-slate-400">
+                </details>
+                <ul className="mt-4 space-y-2 border-t border-slate-800 pt-3 text-xs leading-5 text-slate-400">
                   {brief.sourceVerification.notes.map((note) => (
                     <li key={note}>- {note}</li>
                   ))}
@@ -495,7 +448,7 @@ export default function Home() {
               <div className="grid gap-4">
                 {brief.keyNews.length > 0 ? (
                   brief.keyNews.map((item) => (
-                    <article key={`${item.title}-${item.sourceLink}`} className="rounded border border-slate-700 bg-slate-950 p-4">
+                    <article key={`${item.title}-${item.sourceLink}`} className="border-l-2 border-l-teal-300/70 bg-slate-950 px-4 py-4">
                       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                         <div>
                           <a
@@ -567,18 +520,56 @@ export default function Home() {
               </p>
             </Panel>
 
-            <Panel title={t.searchStrategy}>
-              <div className="grid gap-2 md:grid-cols-2">
-                {brief.searchDiagnostics.map((item, index) => (
-                  <div key={`${item.provider}-${item.mode}-${item.query}-${index}`} className="rounded border border-slate-800 bg-slate-950 p-3">
-                    <p className="text-xs font-semibold text-slate-300">
-                      {item.provider} | {item.mode}
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{item.query}</p>
+            <details className="border border-slate-700 bg-slate-900/50 px-5 py-4">
+              <summary className="cursor-pointer list-none">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-slate-200">{t.auditTrail}</span>
+                  <span className="text-xs text-slate-500">{t.auditHint}</span>
+                </div>
+              </summary>
+              <div className="mt-5 grid gap-5">
+                <div>
+                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.sourceList}</h2>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {brief.sources.map((source) => (
+                      <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="border border-slate-700 bg-slate-950 p-3 text-sm hover:border-teal-300/50">
+                        <p className="font-semibold leading-5 text-slate-100">S{source.id}: {source.title}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span>{source.publishedDate ?? t.dateNotProvided}</span><span>{source.source}</span>
+                          <span className={`border px-1.5 py-0.5 text-[11px] font-semibold ${tierClassName(source.sourceTier)}`}>{displayTier(source.sourceTier, language)}</span>
+                        </div>
+                        {source.dateStatus === "unverified" || !source.usableForClaims ? <p className="mt-2 text-xs text-amber-100">{source.dateStatus === "unverified" ? t.dateUnverified : t.notUsedForClaims}</p> : null}
+                      </a>
+                    ))}
                   </div>
-                ))}
+                </div>
+
+                <div>
+                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.eventClusters}</h2>
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {brief.eventClusters.map((cluster) => (
+                      <div key={cluster.id} className="border border-slate-700 bg-slate-950 p-3">
+                        <div className="flex items-start justify-between gap-3"><h3 className="text-sm font-semibold text-slate-100">{cluster.label}</h3><span className="text-xs text-slate-500">{cluster.sourceCount} {t.sources}</span></div>
+                        <p className="mt-2 text-xs text-slate-500">{t.latest}: {cluster.latestDate ?? t.dateNotProvided} | {cluster.representativeSource}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.searchStrategy}</h2>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {brief.searchDiagnostics.map((item, index) => (
+                      <div key={`${item.provider}-${item.mode}-${item.query}-${index}`} className="border border-slate-800 bg-slate-950 p-3">
+                        <div className="flex flex-wrap items-center gap-2"><p className="text-xs font-semibold text-slate-300">{item.provider} | {item.mode}</p>{item.status ? <span className="border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-300">{displaySearchStatus(item.status, language)}</span> : null}{typeof item.resultCount === "number" ? <span className="text-[11px] text-slate-500">{item.resultCount} {t.results}</span> : null}</div>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{item.query}</p>
+                        {item.error ? <p className="mt-1 text-xs leading-5 text-amber-100">{item.error}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </Panel>
+            </details>
 
           </>
         ) : null}

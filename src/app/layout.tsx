@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Equity Research Copilot",
-  description: "Source-verifiable AI research brief for public equities",
+  title: "Verified Equity Brief",
+  description: "Source-verifiable news intelligence for public equities",
 };
 
 export default function RootLayout({

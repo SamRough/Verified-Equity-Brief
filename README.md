@@ -1,6 +1,6 @@
-# Equity Research Copilot
+# Verified Equity Brief
 
-A verified news intelligence tool for equity research workflows. Enter `Tencent` or `0700.HK`, select a time range and language, and the app filters candidate news into verified, source-qualified items before generating an optional cited brief.
+A verified news intelligence tool for equity research workflows. Enter a company name or ticker such as `Tencent`, `0700.HK`, `AMD`, or `PDD`, select a time range and language, and the app retrieves source-qualified finance news before generating a cited brief.
 
 ## Why this exists
 
@@ -8,12 +8,12 @@ AI research tools can hallucinate: they may invent news, mix old stories into a 
 
 ## How the demo reduces hallucination
 
-- Retrieves real articles through SerpAPI as the primary search provider, with Tavily as an optional fallback.
-- Uses source-bucketed retrieval for official/exchange announcements, regulators, Chinese financial media, HK financial media, and international financial media.
+- Uses finance-first retrieval: Marketaux and Alpha Vantage are the preferred news APIs; Yahoo Finance, Sina Finance, Google News RSS discovery (local personal demo only), Chinese/HK financial media searches, Tavily, and SerpAPI are fallback or supplemental sources.
+- Uses source-bucketed retrieval for official/exchange announcements, regulators, Chinese financial media, HK financial media, international financial media, and finance API feeds.
 - Chinese mode uses a strict serious-source allowlist and rejects Baijiahao, portals, forums, social posts, search pages, and content-farm reposts.
-- Normalizes and filters results for Tencent relevance, duplicate URLs, low-quality sources, and selected time range.
-- Supports English and Simplified Chinese brief generation. Chinese mode prioritizes SerpAPI Baidu News for Chinese financial media.
-- Shows the news candidates and evidence quality before the generated brief.
+- Normalizes and filters results for company relevance, duplicate URLs, low-quality sources, event duplication, and selected time range.
+- Supports English and Simplified Chinese brief generation. Chinese mode prioritizes strict finance-source filtering over generic web results.
+- Shows the news candidates, event clusters, provider diagnostics, and evidence quality before the generated brief.
 - Sends only verified, claim-usable article data to the language model.
 - Requires structured JSON with article ID citations.
 - Removes any rendered claim that has no valid citation.
@@ -30,29 +30,41 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+With the local server running, verify the source and citation invariants across A-share, Hong Kong, and US examples:
+
+```bash
+npm run verify:retrieval
+```
+
 ## Required environment variables
 
 ```bash
 DEEPSEEK_API_KEY=sk-your-deepseek-key
+MARKETAUX_API_KEY=your-marketaux-key
+ALPHAVANTAGE_API_KEY=your-alpha-vantage-key
 SERPAPI_API_KEY=your-serpapi-key
 TAVILY_API_KEY=tvly-your-tavily-key
-DEEPSEEK_MODEL=deepseek-v4-pro
+SEARCH_API_KEY=tvly-your-tavily-key
+DEEPSEEK_MODEL=deepseek-chat
+# Optional: local personal-demo only; do not use in shared or commercial deployment.
+GOOGLE_NEWS_RSS_PERSONAL_DEMO=true
 ```
 
-`SERPAPI_API_KEY` is the primary search key. `TAVILY_API_KEY` is optional and used only as fallback. `DEEPSEEK_MODEL` is optional and defaults to `deepseek-v4-pro`.
+`MARKETAUX_API_KEY` and `ALPHAVANTAGE_API_KEY` are the preferred finance-news sources. `SERPAPI_API_KEY`, `TAVILY_API_KEY`, and `SEARCH_API_KEY` are optional fallback search providers. `GOOGLE_NEWS_RSS_PERSONAL_DEMO=true` enables an experimental local discovery route: it decodes Google News RSS links to original publishers and admits only original URLs that pass the normal source, relevance, date, and tier checks. It should remain off for shared or commercial use. `DEEPSEEK_MODEL` is optional and defaults to `deepseek-chat` unless set to `deepseek-reasoner`.
 
 ## Limitations
 
 - No database, login, watchlist, alerts, or PDF export.
-- Search quality depends on SerpAPI, Tavily fallback availability, and live web/news availability.
-- Chinese news uses SerpAPI Baidu News first, but the app intentionally rejects low-quality Chinese sources. If strict sources are insufficient, the app will say so instead of filling the brief with content-farm results.
+- Search quality depends on live finance/news API availability and provider quotas.
+- Google News RSS is optional, experimental, and intended only for this local personal demo; it is not a licensed commercial news feed.
+- Chinese news still needs strong upstream source coverage. The app intentionally rejects low-quality Chinese sources; if strict sources are insufficient, it will say so instead of filling the brief with content-farm results.
+- The current source stack is a demo stack, not a licensed all-market news feed. See [News Quality Standard](docs/NEWS_QUALITY.md) for the live acceptance snapshot, commercial-use boundary, and paid-launch gates.
 - The app prefers regulatory, exchange, company, and mainstream financial media sources, but some paywalled or blocked sources may only provide snippets.
 - Article full text may be incomplete when the search provider cannot retrieve it.
 - The demo is not investment advice and does not produce buy, sell, or hold recommendations.
 
 ## Future improvements
 
-- Add official exchange announcements and filings as a preferred retrieval source.
-- Add source reputation scoring and better clustering of syndicated articles.
+- Add more direct adapters for exchange announcements, company IR pages, and Chinese vertical finance pages.
+- Add recorded retrieval regression tests for common A/H/US equity cases.
 - Add stricter date validation and article-level quote extraction.
-- Add regression tests with recorded search fixtures for development only.

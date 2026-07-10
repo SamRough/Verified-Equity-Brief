@@ -8,6 +8,16 @@ export type SourceCategory =
   | "International financial media"
   | "General news";
 export type SourceTier = 1 | 2 | 3;
+export type SearchMode =
+  | "Marketaux"
+  | "Alpha Vantage"
+  | "Google News"
+  | "Google News RSS"
+  | "Google Web"
+  | "Bing News"
+  | "Tavily"
+  | "Sina Finance"
+  | "Yahoo Finance";
 
 export type Article = {
   id: number;
@@ -17,7 +27,7 @@ export type Article = {
   sourceTier: SourceTier;
   sourceTierLabel: string;
   searchProvider: string;
-  searchMode: "Google News" | "Google Web" | "Bing News" | "Tavily" | "Sina Finance" | "Yahoo Finance";
+  searchMode: SearchMode;
   eventClusterId: string;
   publishedDate: string | null;
   dateSource: "search-api" | "page-metadata" | "url" | "unavailable";
@@ -88,9 +98,12 @@ export type EventCluster = {
 
 export type SearchDiagnostic = {
   provider: string;
-  mode: Article["searchMode"];
+  mode: SearchMode;
   query: string;
   category: SourceCategory;
+  status?: "used" | "empty" | "skipped" | "failed";
+  resultCount?: number;
+  error?: string;
 };
 
 export type ResearchBrief = {

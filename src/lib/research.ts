@@ -38,6 +38,37 @@ type SerpApiResult = {
   stories?: SerpApiResult[];
 };
 
+type MarketauxArticle = {
+  title?: string;
+  url?: string;
+  description?: string;
+  snippet?: string;
+  published_at?: string;
+  source?: string;
+  language?: string;
+  entities?: Array<{
+    symbol?: string;
+    name?: string;
+    exchange?: string | null;
+    match_score?: number;
+  }>;
+};
+
+type AlphaVantageArticle = {
+  title?: string;
+  url?: string;
+  time_published?: string;
+  summary?: string;
+  source?: string;
+  source_domain?: string;
+  overall_sentiment_label?: string;
+  ticker_sentiment?: Array<{
+    ticker?: string;
+    relevance_score?: string;
+    ticker_sentiment_label?: string;
+  }>;
+};
+
 type SearchPlan = {
   query: string;
   category: SourceCategory;
@@ -45,7 +76,8 @@ type SearchPlan = {
   maxResults?: number;
   topic?: "general" | "news";
   mode: Article["searchMode"];
-  provider: "serpapi" | "tavily" | "sina" | "yahoo";
+  provider: "marketaux" | "alphavantage" | "serpapi" | "tavily" | "sina" | "yahoo" | "googleRss";
+  symbols?: string[];
 };
 
 type CompanyContext = {
@@ -56,6 +88,9 @@ type CompanyContext = {
   usTicker?: string;
   hkTicker?: string;
   cnTicker?: string;
+  resolutionSource: "profile" | "input" | "llm" | "profile+llm";
+  resolutionConfidence?: number;
+  expansionTerms: string[];
 };
 
 type RawResult = {
@@ -67,6 +102,21 @@ type RawResult = {
   category: SourceCategory;
   searchProvider: string;
   searchMode: Article["searchMode"];
+  searchQuery: string;
+};
+
+type GoogleNewsRssItem = {
+  title: string;
+  googleUrl: string;
+  publisherUrl: string | null;
+  snippet: string;
+  publishedDate: string | null;
+};
+
+type GoogleNewsDecodeResult = {
+  status?: boolean;
+  decoded_url?: string;
+  message?: string;
 };
 
 type DateSource = Article["dateSource"];
@@ -87,11 +137,16 @@ type NormalizedResults = {
   tierCounts: Record<SourceTier, number>;
   eventClusters: EventCluster[];
   searchDiagnostics: SearchDiagnostic[];
+  company: CompanyContext;
 };
+
+type ProviderFailures = Partial<Record<SearchPlan["provider"], string>>;
 
 const OFFICIAL_EXCHANGE_DOMAINS = [
   "hkexnews.hk",
   "hkex.com.hk",
+  "nyse.com",
+  "nasdaq.com",
   "tencent.com",
   "tencent.com.cn",
 ];
@@ -103,6 +158,9 @@ const REGULATOR_DOMAINS = [
   "csrc.gov.cn",
   "npaa.gov.cn",
   "gov.cn",
+  "sec.gov",
+  "justice.gov",
+  "ftc.gov",
 ];
 
 const CHINESE_FINANCIAL_DOMAINS = [
@@ -118,8 +176,12 @@ const CHINESE_FINANCIAL_DOMAINS = [
   "jiemian.com",
   "thepaper.cn",
   "eeo.com.cn",
+  "bjnews.com.cn",
+  "m.bjnews.com.cn",
   "finance.sina.com.cn",
+  "finance.sina.cn",
   "cj.sina.cn",
+  "sina.cn",
   "finance.eastmoney.com",
   "wap.eastmoney.com",
   "finance.qq.com",
@@ -169,6 +231,9 @@ const INTERNATIONAL_FINANCIAL_DOMAINS = [
   "morningstar.com",
   "finance.yahoo.com",
   "businessinsider.com",
+  "businesswire.com",
+  "globenewswire.com",
+  "prnewswire.com",
   "techcrunch.com",
   "theverge.com",
   "tomshardware.com",
@@ -187,6 +252,7 @@ const TIER_1_DOMAINS = [
   "wsj.com",
   "ft.com",
   "nikkei.com",
+  "sec.gov",
   "caixin.com",
   "yicai.com",
   "cls.cn",
@@ -208,6 +274,9 @@ const TIER_2_DOMAINS = [
   "finance.yahoo.com",
   "fortune.com",
   "businessinsider.com",
+  "businesswire.com",
+  "globenewswire.com",
+  "prnewswire.com",
   "techcrunch.com",
   "theverge.com",
   "tomshardware.com",
@@ -220,8 +289,12 @@ const TIER_2_DOMAINS = [
   "jiemian.com",
   "thepaper.cn",
   "eeo.com.cn",
+  "bjnews.com.cn",
+  "m.bjnews.com.cn",
   "finance.sina.com.cn",
+  "finance.sina.cn",
   "cj.sina.cn",
+  "sina.cn",
   "finance.eastmoney.com",
   "wap.eastmoney.com",
   "finance.qq.com",
@@ -387,6 +460,9 @@ const NON_NEWS_HINTS = [
   "company profile",
   "company dividend",
   "dividend history",
+  "analyst blog",
+  "zacks analyst",
+  "zacks.com",
   "broker ratings",
   "broker",
   "newsletter",
@@ -405,6 +481,15 @@ const NON_NEWS_HINTS = [
   "皮夹克将拍卖",
   "拍卖",
   "according to analysts",
+  "jim cramer",
+  "cramer",
+  "price direction",
+  "what's ahead",
+  "what is ahead",
+  "if you invested",
+  "how much it'd be worth",
+  "stock tracker",
+  "overthinking stock picks",
   "best non-tech stocks",
   "<research>",
   "research>",
@@ -457,8 +542,14 @@ const IRRELEVANT_CONTEXT_HINTS = [
   "grey market intelligence",
   "airlines are installing",
   "luxury seats",
+  "cafeteria",
+  "culture of frugality",
   "爱上拼多多包邮",
   "包邮",
+  "老手艺",
+  "家纺",
+  "新国货逆袭",
+  "数智新国货",
 ];
 
 const STRICT_CHINESE_SOURCE_DOMAINS: Record<SourceCategory, string[]> = {
@@ -518,6 +609,23 @@ const COMPANY_PROFILES: CompanyProfile[] = [
     displayName: "Kuaishou",
     aliases: ["Kuaishou", "快手", "1024.HK"],
     hkTicker: "1024.HK",
+  },
+  {
+    displayName: "Pop Mart",
+    aliases: [
+      "Pop Mart",
+      "POP MART",
+      "Pop Mart International",
+      "Pop Mart International Group",
+      "泡泡玛特",
+      "泡泡瑪特",
+      "9992.HK",
+      "9992",
+      "LABUBU",
+      "THE MONSTERS",
+      "HIRONO",
+    ],
+    hkTicker: "9992.HK",
   },
   {
     displayName: "Baidu",
@@ -608,6 +716,9 @@ function buildCompanyContext(query: string): CompanyContext {
       usTicker: profile.usTicker,
       hkTicker: profile.hkTicker,
       cnTicker: profile.cnTicker,
+      resolutionSource: "profile",
+      resolutionConfidence: 1,
+      expansionTerms: [],
     };
   }
 
@@ -623,19 +734,22 @@ function buildCompanyContext(query: string): CompanyContext {
     usTicker: looksLikeUsTicker ? normalized.toUpperCase() : undefined,
     hkTicker: looksLikeHkTicker ? normalized.replace(/\.HK$/i, "").padStart(4, "0") + ".HK" : undefined,
     cnTicker: looksLikeCnTicker ? normalized : undefined,
+    resolutionSource: "input",
+    resolutionConfidence: 0,
+    expansionTerms: [],
   };
 }
 
 export function rangeDays(range: TimeRange) {
   if (range === "today") return 1;
-  if (range === "week" || range === "last7") return 7;
-  return 30;
+  if (range === "last7") return 7;
+  if (range === "last30") return 30;
+  const now = startOfUtcDay();
+  return Math.round((now.getTime() - cutoffForRange("week").getTime()) / 86_400_000) + 1;
 }
 
 function rangeWhen(range: TimeRange) {
-  if (range === "today") return "1d";
-  if (range === "week" || range === "last7") return "7d";
-  return "30d";
+  return `${rangeDays(range)}d`;
 }
 
 function googleRecentFilter(range: TimeRange) {
@@ -645,15 +759,49 @@ function googleRecentFilter(range: TimeRange) {
 }
 
 function cutoffForRange(range: TimeRange) {
-  const cutoff = new Date();
-  cutoff.setUTCHours(0, 0, 0, 0);
-  cutoff.setUTCDate(cutoff.getUTCDate() - (rangeDays(range) - 1));
+  const cutoff = startOfUtcDay();
+  if (range === "today") return cutoff;
+  if (range === "week") {
+    const daysSinceMonday = (cutoff.getUTCDay() + 6) % 7;
+    cutoff.setUTCDate(cutoff.getUTCDate() - daysSinceMonday);
+    return cutoff;
+  }
+  cutoff.setUTCDate(cutoff.getUTCDate() - (range === "last30" ? 29 : 6));
   return cutoff;
+}
+
+function startOfUtcDay() {
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  return date;
+}
+
+function briefPeriodDescription(range: TimeRange, language: BriefLanguage) {
+  const start = formatIsoDate(cutoffForRange(range));
+  const end = formatIsoDate(new Date());
+  if (language === "zh") return `所选时间范围（${start} 至 ${end}）`;
+  return `the selected time window (${start} through ${end})`;
+}
+
+function aiKeyNewsAnnotationLimit(range: TimeRange) {
+  return range === "last30" ? 6 : range === "today" ? 3 : 4;
 }
 
 function sourceFromUrl(url: string) {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
+    const canonicalPublishers = [
+      { name: "Sina Finance", domains: ["sina.com.cn", "sina.cn"] },
+      { name: "Eastmoney", domains: ["eastmoney.com"] },
+      { name: "Tencent Finance", domains: ["qq.com"] },
+      { name: "Sohu Finance", domains: ["sohu.com"] },
+      { name: "Yahoo Finance", domains: ["yahoo.com"] },
+      { name: "HKEX", domains: ["hkex.com.hk", "hkexnews.hk"] },
+    ];
+    const publisher = canonicalPublishers.find((group) =>
+      group.domains.some((domain) => host === domain || host.endsWith(`.${domain}`)),
+    );
+    if (publisher) return publisher.name;
     return host.split(".").slice(-3).join(".");
   } catch {
     return "Unknown";
@@ -671,6 +819,15 @@ function hostFromUrl(url: string) {
 function matchesDomain(url: string, domains: string[]) {
   const host = hostFromUrl(url);
   return domains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function categoryForUrl(url: string, fallback: SourceCategory): SourceCategory {
+  if (matchesDomain(url, OFFICIAL_EXCHANGE_DOMAINS)) return "Official / Exchange";
+  if (matchesDomain(url, REGULATOR_DOMAINS)) return "Regulator";
+  if (matchesDomain(url, CHINESE_FINANCIAL_DOMAINS)) return "Chinese financial media";
+  if (matchesDomain(url, HK_FINANCIAL_DOMAINS)) return "HK financial media";
+  if (matchesDomain(url, INTERNATIONAL_FINANCIAL_DOMAINS)) return "International financial media";
+  return fallback;
 }
 
 function sourceTierForUrl(url: string): { tier: SourceTier; label: string } {
@@ -810,9 +967,25 @@ function isNonCoreFinancialNoise(article: Article) {
     /\boptions?\b|期权|期權/,
     /price target|target price|raises pt|lowers pt|cuts pt|maintains hold|moves .* to hold|initiates .* at/,
     /upgrade|downgrade|评级|評級|目标价|目標價|大行/,
+    /zacks analyst blog|analyst blog|highlights .* and |what'?s ahead/,
+    /jim cramer|cramer|price direction/,
+    /if you invested|invested \$?\d+.*decade|how much it'?d be worth/,
+    /stock tracker|overthinking stock picks/,
+    /融资买入|融資買入|融资余额|融資餘額|融资融券|融資融券|主力资金|主力資金|资金净流|資金淨流|北向资金|北向資金/,
+    /margin financing|margin balance|northbound funds|fund flows?/,
+    /为什么.*便宜|核心原因|深度解析|实用技巧|實用技巧|避坑|攻略|\bfaq\b|高仿/,
+    /大摩|德银|德銀|摩根士丹利|morgan stanley|deutsche bank/,
+    /weighs in on .*intel.*fed|takes aim at .*fed/i,
     /best .*stocks?|better buy|which .*stock|worth buying|according to analysts|hidden way to trade|trade it/,
     /签名皮夹克|皮夹克.*拍卖|拍卖/,
     /community\/feed|guba|股吧|雪球/,
+    /(?:tencent|腾讯|騰訊).*(?:backed|backing|投资|投資|连续投|參投|参投).*(?:ipo|上市|递表|遞表|冲击ipo|衝擊ipo)/,
+    /(?:tencent|腾讯|騰訊).*(?:都投了|融资|融資).*?(?:阿里|百度|快手|startup|start-up)/,
+    /(?:tencent|腾讯|騰訊).*(?:阿里|百度).*?(?:快手|可灵|可靈|kling|融资|融資|联盟|聯盟)/,
+    /(?:阿里|百度).*?(?:tencent|腾讯|騰訊).*?(?:快手|可灵|可靈|kling|融资|融資|联盟|聯盟)/,
+    /ai视频最大单笔融资|ai視頻最大單筆融資/,
+    /(?:backed by|backed).*?(?:tencent|腾讯|騰訊).*?(?:ipo|上市|递表|遞表)/,
+    /^[\u4e00-\u9fa5A-Za-z0-9 .-]{2,24}[：:][\s\S]*(?:英特尔|intel)[\s\S]*(?:amd|超威|超微)/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -832,10 +1005,10 @@ function financialNewsScore(article: Article, company: CompanyContext) {
     /回购|回購|repurchase|buyback|分红|分紅|dividend|派息|配股|增发|增發|convertible|可转债|可轉債/,
     /收购|收購|并购|併購|出售|剥离|剝離|退出|投资|投資|融资|融資|acquisition|merger|divest|stake|investment|funding/,
     /监管|監管|调查|調查|审批|審批|罚款|罰款|诉讼|訴訟|反垄断|反壟斷|regulation|regulator|probe|antitrust|lawsuit|approval/,
-    /发布|發布|推出|上线|上線|测试|測試|launch|release|rollout|unveil|ship|deliver/,
+    /发布|發布|推出|上线|上線|测试|測試|launch|release|rollout|unveil|ship|deliver|exhibition|展览|展覽|store|stores|retail|flagship|开店|開店|关店|關店|门店|門店|概念店|旗艦店|旗舰店|乐园|樂園|主题公园|主題公園|家电|家電/,
     /ai|人工智能|大模型|模型|芯片|晶片|算力|gpu|cloud|云|雲|data center|robot|机器人|機器人|semiconductor/,
     /门店|門店|产能|產能|交付|销量|銷量|价格战|價格戰|补贴|補貼|供应链|供應鏈|logistics|delivery|supply chain/,
-    /战略|戰略|重组|重組|组织调整|組織調整|高管|ceo|cfo|management|layoff|裁员|招聘|office|办公楼|總部|总部/,
+    /战略|戰略|布局|落子|落地|擴張|扩张|园区|園區|入职|入職|重组|重組|组织调整|組織調整|高管|ceo|cfo|management|layoff|裁员|招聘|office|offices|campus|headcount|hiring|办公楼|辦公樓|写字楼|寫字樓|购楼|購樓|购入|購入|置业|置業|办公|總部|总部|经营任务|經營任務|经营会议|經營會議|营销工作会|營銷工作會|渠道改革|渠道調整|渠道调整|产品管线|產品管線|新ip|\bip\b|手游|手遊|甜品店/,
   ];
 
   for (const pattern of hardNewsPatterns) {
@@ -850,7 +1023,7 @@ function financialNewsScore(article: Article, company: CompanyContext) {
 
   const weakOrMarketOnlyPatterns = [
     /股价|股價|上涨|上漲|下跌|涨超|漲超|跌超|盘中|盤中|尾盘|尾盤|premarket|after-hours|shares (?:rise|fall|slip|jump)/,
-    /technical|indicator|技术指标|技術指標|反弹信号|反彈信號|what'?s going on|why .*stock|stock moved/,
+    /jump \d+%|jumps \d+%|stock jumps|stocks? catch .*bid|risk-on bid|technical|indicator|技术指标|技術指標|反弹信号|反彈信號|what'?s going on|why .*stock|stock moved/,
     /price target|target price|raises pt|lowers pt|评级|評級|大行|broker|analyst|according to analysts/,
     /better buy|worth buying|best .*stocks?|which .*stock|值得买入|更值得买入|最值得/,
     /quote|股價、新聞、報價|股价、新闻、报价|share price|stock price/,
@@ -904,7 +1077,9 @@ function eventKey(article: Pick<Article, "title" | "snippet" | "content">) {
   const text = `${article.title} ${article.snippet} ${article.content}`.toLowerCase();
 
   if (/cxmt|长鑫|長鑫|memory supply|内存|dram|存储芯片/.test(text)) return "cxmt-memory-supply";
-  if (/雄安|xiong.?an|办公楼|office building/.test(text)) return "xiongan-office-expansion";
+  if (/雄安|xiong.?an|陆家嘴|lōjiāzuǐ|办公楼|辦公樓|office building|购楼|購樓|大厦|大廈/.test(text)) {
+    return "office-expansion";
+  }
   if (/小微|xiaowei|wechat ai|微信.*ai|ai.*微信|ai assistant/.test(text)) return "wechat-ai-xiaowei";
   if (/marvelous|japanese game|japan gaming|game studios|游戏工作室|海外游戏|日本游戏/.test(text)) {
     return "overseas-gaming-investments";
@@ -923,11 +1098,104 @@ function eventKey(article: Pick<Article, "title" | "snippet" | "content">) {
     .join("-");
 }
 
+const EVENT_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "news",
+  "stock",
+  "shares",
+  "company",
+  "latest",
+  "报道",
+  "财经",
+  "新闻",
+  "公司",
+  "集团",
+  "控股",
+  "最新",
+]);
+
+function headlineEventTerms(title: string, company: CompanyContext) {
+  let text = title.toLowerCase().replace(/\s+-\s+[^-]{1,60}$/, " ");
+  for (const alias of company.aliases) {
+    if (alias.length >= 2) text = text.replace(aliasRegex(alias), " ");
+  }
+
+  const terms = new Set<string>();
+  for (const word of text.match(/[a-z][a-z0-9.-]{2,}/g) ?? []) {
+    if (!EVENT_STOP_WORDS.has(word)) terms.add(word);
+  }
+
+  for (const phrase of text.match(/[\u3400-\u9fff]{2,}/g) ?? []) {
+    for (let index = 0; index < phrase.length - 1; index += 1) {
+      const bigram = phrase.slice(index, index + 2);
+      if (!EVENT_STOP_WORDS.has(bigram)) terms.add(bigram);
+    }
+  }
+
+  return terms;
+}
+
+function headlineEventSimilarity(left: Article, right: Article, company: CompanyContext) {
+  const leftTerms = headlineEventTerms(left.title, company);
+  const rightTerms = headlineEventTerms(right.title, company);
+  if (leftTerms.size === 0 || rightTerms.size === 0) return 0;
+
+  let overlap = 0;
+  for (const term of leftTerms) {
+    if (rightTerms.has(term)) overlap += 1;
+  }
+
+  const containsCjkHeadline = containsCjk(left.title) || containsCjk(right.title);
+  const minimumOverlap = containsCjkHeadline ? 2 : 1;
+  if (overlap < minimumOverlap) return 0;
+
+  return overlap / Math.min(leftTerms.size, rightTerms.size);
+}
+
+function assignEventClusters(articles: Article[], language: BriefLanguage, company: CompanyContext) {
+  type EventGroup = { id: string; representative: Article; articles: Article[] };
+  const groups: EventGroup[] = [];
+  const ranked = [...articles].sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company));
+
+  for (const article of ranked) {
+    const baseId = eventKey(article) || "company-news";
+    const matchedByKey = groups.find((group) => group.id === baseId);
+    const matchedByHeadline = groups.find((group) => {
+      const similarity = headlineEventSimilarity(article, group.representative, company);
+      const threshold = containsCjk(article.title) || containsCjk(group.representative.title) ? 0.16 : 0.28;
+      return similarity >= threshold;
+    });
+    const matched = matchedByKey ?? matchedByHeadline;
+
+    if (matched) {
+      matched.articles.push(article);
+      continue;
+    }
+
+    const duplicateCount = groups.filter((group) => group.id === baseId || group.id.startsWith(`${baseId}-`)).length;
+    groups.push({
+      id: duplicateCount === 0 ? baseId : `${baseId}-${duplicateCount + 1}`,
+      representative: article,
+      articles: [article],
+    });
+  }
+
+  return groups
+    .flatMap((group) => group.articles.map((article) => ({ ...article, eventClusterId: group.id })))
+    .sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company));
+}
+
 function eventLabelForKey(key: string, language: BriefLanguage) {
   const labels: Record<string, Record<BriefLanguage, string>> = {
     "wechat-ai-xiaowei": { en: "WeChat / AI assistant", zh: "微信 / AI 助手" },
     "cxmt-memory-supply": { en: "CXMT memory supply", zh: "长鑫存储 / 内存供应" },
-    "xiongan-office-expansion": { en: "Xiong'an office expansion", zh: "雄安办公布局" },
+    "office-expansion": { en: "Office footprint expansion", zh: "办公布局" },
     "overseas-gaming-investments": { en: "Overseas gaming investments", zh: "海外游戏投资" },
     "share-buyback": { en: "Share buyback", zh: "股份回购" },
     regulation: { en: "Regulatory development", zh: "监管动态" },
@@ -987,10 +1255,13 @@ function diversifyArticlesByEvent(articles: Article[], limit: number) {
   const sourceCounts = new Map<string, number>();
 
   function maybeAdd(article: Article, maxPerEvent: number, maxPerSource: number) {
-    const key = eventKey(article);
+    const key = article.eventClusterId || eventKey(article);
     const eventCount = eventCounts.get(key) ?? 0;
     const sourceCount = sourceCounts.get(article.source) ?? 0;
     if (selected.some((selectedArticle) => selectedArticle.url === article.url)) return false;
+    if (selected.some((selectedArticle) => selectedArticle.eventClusterId === key && selectedArticle.source === article.source)) {
+      return false;
+    }
     if (eventCount >= maxPerEvent) return false;
     if (sourceCount >= maxPerSource) return false;
     selected.push(article);
@@ -1005,7 +1276,7 @@ function diversifyArticlesByEvent(articles: Article[], limit: number) {
   }
 
   for (const article of articles) {
-    maybeAdd(article, 4, 4);
+    maybeAdd(article, 2, 4);
     if (selected.length >= limit) return selected;
   }
 
@@ -1116,17 +1387,25 @@ function evidenceFromSearchDate(dateText: string | null): DateEvidence | null {
 function isRelevantForCategory(article: Article, company = buildCompanyContext("Tencent")) {
   if (isGenericSourcePage(article)) return false;
   if (isNonCoreFinancialNoise(article)) return false;
-  if (!company.isTencent && !directCompanyMentionInTitle(article, company)) return false;
-  if (!directCompanyMentionInTitleOrSnippet(article, company)) return false;
-  if (!isDirectTencentMention(article, company)) return false;
+  const titleMention = directCompanyMentionInTitle(article, company);
+  const titleOrSnippetMention = directCompanyMentionInTitleOrSnippet(article, company);
+  if (!titleOrSnippetMention) return false;
+  // Some financial wires place the issuer in the deck rather than the headline.
+  // Accept that only from a stronger publisher and only with a clear entity score.
+  if (!titleMention && article.sourceTier === 3) return false;
+  if (companyRelevanceScore(article, company) < (titleMention ? 4 : 6)) return false;
   if (!isFinancialNewsEvent(article, company)) return false;
   return true;
 }
 
 function isAllowedSource(article: Article, language: BriefLanguage) {
-  const allowedDomains = STRICT_CHINESE_SOURCE_DOMAINS[article.category];
+  return isAllowedUrl(article.url, article.category, language);
+}
+
+function isAllowedUrl(url: string, category: SourceCategory, language: BriefLanguage) {
+  const allowedDomains = STRICT_CHINESE_SOURCE_DOMAINS[category];
   if (allowedDomains.length === 0) return language !== "zh";
-  return matchesDomain(article.url, allowedDomains);
+  return matchesDomain(url, allowedDomains);
 }
 
 function makePlan(
@@ -1135,6 +1414,7 @@ function makePlan(
   mode: Article["searchMode"],
   maxResults: number,
   includeDomains?: string[],
+  symbols?: string[],
 ): SearchPlan {
   return {
     query,
@@ -1142,15 +1422,22 @@ function makePlan(
     includeDomains,
     maxResults,
     topic: mode === "Google Web" ? "general" : "news",
+    symbols,
     mode,
     provider:
-      mode === "Tavily"
-        ? "tavily"
-        : mode === "Sina Finance"
-          ? "sina"
-          : mode === "Yahoo Finance"
-            ? "yahoo"
-            : "serpapi",
+      mode === "Marketaux"
+        ? "marketaux"
+        : mode === "Alpha Vantage"
+          ? "alphavantage"
+          : mode === "Google News RSS"
+            ? "googleRss"
+          : mode === "Tavily"
+            ? "tavily"
+            : mode === "Sina Finance"
+              ? "sina"
+              : mode === "Yahoo Finance"
+                ? "yahoo"
+                : "serpapi",
   };
 }
 
@@ -1161,31 +1448,349 @@ function siteQuery(query: string, domains: string[]) {
 function dedupePlans(plans: SearchPlan[]) {
   const seen = new Set<string>();
   return plans.filter((plan) => {
-    const key = `${plan.provider}|${plan.mode}|${plan.category}|${plan.query}`;
+    const key = `${plan.provider}|${plan.mode}|${plan.category}|${plan.query}|${plan.symbols?.join(",") ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-function buildSearchPlans(query: string, language: BriefLanguage): SearchPlan[] {
-  const company = buildCompanyContext(query);
+function tickerSymbolsForFinanceApis(company: CompanyContext) {
+  return [company.usTicker, company.hkTicker, company.cnTicker]
+    .filter((item): item is string => Boolean(item))
+    .map((item) => item.toUpperCase());
+}
+
+function alphaVantageTicker(company: CompanyContext) {
+  return company.usTicker?.toUpperCase() ?? null;
+}
+
+function yahooFinanceQueries(company: CompanyContext) {
+  const queries = [
+    company.usTicker,
+    company.displayName,
+    company.hkTicker,
+    company.cnTicker,
+  ].filter((item): item is string => Boolean(item));
+  return [...new Set(queries)];
+}
+
+function containsCjk(text: string) {
+  return /[\u3400-\u9fff]/.test(text);
+}
+
+function localizedPrimaryName(company: CompanyContext, language: BriefLanguage) {
+  if (language === "zh") {
+    if (containsCjk(company.input)) return company.input;
+    return company.aliases.find((alias) => containsCjk(alias)) ?? company.displayName;
+  }
+
+  return company.displayName;
+}
+
+type CompanyResolution = {
+  displayName?: string;
+  canonicalEnglishName?: string;
+  canonicalChineseName?: string;
+  aliases: string[];
+  productAliases: string[];
+  usTicker?: string;
+  hkTicker?: string;
+  cnTicker?: string;
+  confidence: number;
+};
+
+const companyResolutionCache = new Map<string, Promise<CompanyContext>>();
+
+const GENERIC_EXPANSION_TERMS = new Set([
+  "ai",
+  "cloud",
+  "gaming",
+  "news",
+  "stock",
+  "stocks",
+  "company",
+  "group",
+  "holdings",
+  "inc",
+  "corp",
+  "corporation",
+  "core",
+  "atom",
+  "arc",
+  "international",
+  "limited",
+  "ltd",
+  "plc",
+  "科技",
+  "公司",
+  "集团",
+  "集團",
+  "控股",
+  "股份",
+  "新闻",
+  "新聞",
+  "财经",
+  "財經",
+  "股票",
+  "证券",
+  "證券",
+]);
+
+function cleanExpansionTerm(value: unknown) {
+  if (typeof value !== "string") return null;
+  const term = value.replace(/\s+/g, " ").trim();
+  if (term.length < 2 || term.length > 60) return null;
+  const lower = term.toLowerCase();
+  if (GENERIC_EXPANSION_TERMS.has(lower)) return null;
+  if (/https?:|www\.|site:|\bafter:|\bor\b/i.test(term)) return null;
+  if (!/[\p{L}\p{N}]/u.test(term)) return null;
+  return term;
+}
+
+function cleanTermList(values: unknown, limit = 24) {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const value of values) {
+    const term = cleanExpansionTerm(value);
+    if (!term) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    terms.push(term);
+    if (terms.length >= limit) break;
+  }
+  return terms;
+}
+
+function uniqueTerms(values: unknown[], limit = 28) {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const value of values) {
+    const term = cleanExpansionTerm(value);
+    if (!term) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    terms.push(term);
+    if (terms.length >= limit) break;
+  }
+  return terms;
+}
+
+function normalizeUsTicker(value: unknown) {
+  const term = cleanExpansionTerm(value)?.toUpperCase();
+  if (!term) return undefined;
+  return /^[A-Z]{1,6}(?:\.[A-Z])?$/.test(term) ? term : undefined;
+}
+
+function normalizeHkTicker(value: unknown) {
+  const term = cleanExpansionTerm(value)?.toUpperCase();
+  if (!term) return undefined;
+  const match = term.match(/^(\d{1,5})(?:\.HK)?$/);
+  if (!match) return undefined;
+  return `${match[1].padStart(4, "0")}.HK`;
+}
+
+function normalizeCnTicker(value: unknown) {
+  const term = cleanExpansionTerm(value);
+  if (!term) return undefined;
+  return /^(?:60|68|00|30)\d{4}$/.test(term) ? term : undefined;
+}
+
+async function resolveCompanyExpansionWithDeepSeek(
+  query: string,
+  language: BriefLanguage,
+  base: CompanyContext,
+): Promise<CompanyResolution | null> {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: deepSeekModel(),
+        temperature: 0,
+        max_tokens: 900,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You resolve public-company search aliases for equity news retrieval. Return JSON only. Do not invent news, events, dates, or sources. If a ticker or alias is uncertain, omit it.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              input: query,
+              userLanguage: language,
+              existingContext: {
+                displayName: base.displayName,
+                aliases: base.aliases,
+                usTicker: base.usTicker ?? null,
+                hkTicker: base.hkTicker ?? null,
+                cnTicker: base.cnTicker ?? null,
+              },
+              task:
+                "Return conservative aliases, exchange tickers, and major brand/product terms that are useful for retrieving company-specific finance news.",
+              rules: [
+                "Use common public-company names only.",
+                "Include product or IP names only when they are strongly associated with the company and likely to appear in news headlines.",
+                "Do not include generic industry terms such as AI, cloud, gaming, chips, ecommerce, retail, or finance.",
+                "Do not include search operators, URLs, news topics, dates, or claims.",
+                "If the input is ambiguous, keep confidence below 0.55 and return only the original input.",
+              ],
+              schema: {
+                displayName: "string or null",
+                canonicalEnglishName: "string or null",
+                canonicalChineseName: "string or null",
+                aliases: ["company aliases, legal names, ADR names"],
+                productAliases: ["major brands, products, IP names"],
+                usTicker: "NASDAQ/NYSE ticker or null",
+                hkTicker: "Hong Kong ticker like 9992.HK or null",
+                cnTicker: "A-share ticker or null",
+                confidence: "0 to 1",
+              },
+            }),
+          },
+        ],
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) return null;
+    const json = await response.json();
+    const raw = json.choices?.[0]?.message?.content;
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    const parsed = safeParseJson(raw) as Record<string, unknown>;
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0)));
+    if (confidence < 0.55) return null;
+
+    return {
+      displayName: cleanExpansionTerm(parsed.displayName) ?? undefined,
+      canonicalEnglishName: cleanExpansionTerm(parsed.canonicalEnglishName) ?? undefined,
+      canonicalChineseName: cleanExpansionTerm(parsed.canonicalChineseName) ?? undefined,
+      aliases: cleanTermList(parsed.aliases, 14),
+      productAliases: cleanTermList(parsed.productAliases, 10),
+      usTicker: normalizeUsTicker(parsed.usTicker),
+      hkTicker: normalizeHkTicker(parsed.hkTicker),
+      cnTicker: normalizeCnTicker(parsed.cnTicker),
+      confidence,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeCompanyResolution(base: CompanyContext, resolution: CompanyResolution | null): CompanyContext {
+  if (!resolution) return base;
+
+  const displayName = base.resolutionSource === "profile" ? base.displayName : (resolution.displayName ?? base.displayName);
+  const tickers = [resolution.usTicker, resolution.hkTicker, resolution.cnTicker].filter((item): item is string => Boolean(item));
+  const aliases = uniqueTerms(
+    [
+      displayName,
+      ...base.aliases,
+      resolution.displayName,
+      resolution.canonicalEnglishName,
+      resolution.canonicalChineseName,
+      ...resolution.aliases,
+      ...tickers,
+      ...resolution.productAliases,
+    ],
+    32,
+  );
+  const baseKeys = new Set(base.aliases.map((alias) => alias.toLowerCase()));
+  const expansionTerms = aliases.filter((alias) => !baseKeys.has(alias.toLowerCase()) && alias !== displayName).slice(0, 16);
+
+  return {
+    ...base,
+    displayName,
+    aliases: aliases.length ? aliases : base.aliases,
+    usTicker: base.usTicker ?? resolution.usTicker,
+    hkTicker: base.hkTicker ?? resolution.hkTicker,
+    cnTicker: base.cnTicker ?? resolution.cnTicker,
+    resolutionSource: base.resolutionSource === "profile" ? "profile+llm" : "llm",
+    resolutionConfidence: resolution.confidence,
+    expansionTerms,
+  };
+}
+
+async function resolveCompanyContext(query: string, language: BriefLanguage) {
+  const key = `${language}:${query.trim().toLowerCase()}`;
+  const cached = companyResolutionCache.get(key);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const base = buildCompanyContext(query);
+    const resolution = await resolveCompanyExpansionWithDeepSeek(query, language, base);
+    return mergeCompanyResolution(base, resolution);
+  })();
+
+  companyResolutionCache.set(key, promise);
+  return promise;
+}
+
+function companyResolutionNote(company: CompanyContext, language: BriefLanguage) {
+  if (company.resolutionSource !== "llm" && company.resolutionSource !== "profile+llm") return null;
+  const terms = company.expansionTerms.slice(0, 10).join(", ");
+  if (!terms) return null;
+  return language === "zh"
+    ? `检索实体扩展: ${company.input} -> ${terms}。这些词只用于检索和过滤，不作为新闻事实。`
+    : `Search entity expansion: ${company.input} -> ${terms}. These terms are used only for retrieval and filtering, not as news facts.`;
+}
+
+function compactNotes(notes: Array<string | null | undefined>) {
+  return notes.filter((note): note is string => Boolean(note));
+}
+
+function buildSearchPlans(company: CompanyContext, language: BriefLanguage): SearchPlan[] {
   const primary = company.displayName;
+  const localizedPrimary = localizedPrimaryName(company, language);
   const expanded = company.aliases.join(" OR ");
   const tickerAliases = [company.usTicker, company.hkTicker, company.cnTicker].filter((item): item is string => Boolean(item));
+  const financeApiSymbols = tickerSymbolsForFinanceApis(company);
+  const marketauxSearch =
+    language === "zh"
+      ? `${[primary, ...company.aliases, ...tickerAliases].slice(0, 8).join(" OR ")} 财经 OR 业绩 OR 回购 OR 监管 OR AI OR 合作`
+      : `${[primary, ...company.aliases, ...tickerAliases].slice(0, 8).join(" OR ")} earnings OR revenue OR buyback OR regulation OR AI OR deal`;
   const zhAliases = company.isTencent ? ["腾讯", "腾讯控股", "00700", "0700.HK"] : [primary, ...company.aliases, ...tickerAliases];
   const enAliases = company.isTencent ? ["Tencent", "Tencent Holdings", "0700.HK", "TCEHY"] : [primary, expanded];
   const zhNoiseExclusions = "-百家号 -搜狐号 -网易号 -腾讯新闻 -高考 -志愿 -剑南春";
+  const alphaTicker = alphaVantageTicker(company);
+  const yahooQueries = yahooFinanceQueries(company);
 
   if (language === "zh") {
-    const zhPrimary = company.isTencent ? "腾讯" : primary;
+    const zhPrimary = company.isTencent ? "腾讯" : localizedPrimary;
     const plans: SearchPlan[] = [
-      ...(company.usTicker
-        ? [
-            makePlan(company.usTicker, "Chinese financial media", "Sina Finance", 20, CHINESE_FINANCIAL_DOMAINS),
-            makePlan(company.usTicker, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
-          ]
+      makePlan(marketauxSearch, "Chinese financial media", "Marketaux", 50, undefined, financeApiSymbols),
+      ...(alphaTicker
+        ? [makePlan(alphaTicker, "International financial media", "Alpha Vantage", 50, undefined, [alphaTicker])]
         : []),
+      ...[company.usTicker, company.hkTicker, company.cnTicker]
+        .filter((ticker): ticker is string => Boolean(ticker))
+        .map((ticker) => makePlan(ticker, "Chinese financial media", "Sina Finance", 30, CHINESE_FINANCIAL_DOMAINS)),
+      ...yahooQueries.map((item) =>
+        makePlan(item, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
+      ),
+      // Personal-demo discovery only: RSS results are decoded to the original publisher URL,
+      // then go through the same source, relevance, date, and tier gates as every other result.
+      makePlan(`${zhPrimary} 财经 新闻`, "Chinese financial media", "Google News RSS", 14, CHINESE_FINANCIAL_DOMAINS),
+      makePlan(
+        `${zhPrimary} 公司 业绩 回购 监管 产品 合作`,
+        "Chinese financial media",
+        "Google News RSS",
+        14,
+        CHINESE_FINANCIAL_DOMAINS,
+      ),
+      makePlan(`${primary} company news`, "International financial media", "Google News RSS", 10, INTERNATIONAL_FINANCIAL_DOMAINS),
       makePlan(`${zhPrimary} 新闻`, "Chinese financial media", "Google News", 20, CHINESE_FINANCIAL_DOMAINS),
       makePlan(`${zhAliases.join(" ")} 最新 新闻 ${zhNoiseExclusions}`, "Chinese financial media", "Google Web", 20, CHINESE_FINANCIAL_DOMAINS),
       makePlan(
@@ -1242,12 +1847,24 @@ function buildSearchPlans(query: string, language: BriefLanguage): SearchPlan[] 
   }
 
   return dedupePlans([
-    ...(company.usTicker
-      ? [
-          makePlan(company.usTicker, "Chinese financial media", "Sina Finance", 20, CHINESE_FINANCIAL_DOMAINS),
-          makePlan(company.usTicker, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
-        ]
+    makePlan(marketauxSearch, "International financial media", "Marketaux", 50, undefined, financeApiSymbols),
+    ...(alphaTicker
+      ? [makePlan(alphaTicker, "International financial media", "Alpha Vantage", 50, undefined, [alphaTicker])]
       : []),
+    ...[company.usTicker, company.hkTicker, company.cnTicker]
+      .filter((ticker): ticker is string => Boolean(ticker))
+      .map((ticker) => makePlan(ticker, "Chinese financial media", "Sina Finance", 30, CHINESE_FINANCIAL_DOMAINS)),
+    ...yahooQueries.map((item) =>
+      makePlan(item, "International financial media", "Yahoo Finance", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
+    ),
+    makePlan(`${primary} company news`, "International financial media", "Google News RSS", 14, INTERNATIONAL_FINANCIAL_DOMAINS),
+    makePlan(
+      `${primary} earnings deal product regulation`,
+      "International financial media",
+      "Google News RSS",
+      14,
+      INTERNATIONAL_FINANCIAL_DOMAINS,
+    ),
     makePlan(expanded, "International financial media", "Google News", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
     makePlan(`${primary} stock news`, "International financial media", "Google News", 20, INTERNATIONAL_FINANCIAL_DOMAINS),
     makePlan(`${primary} earnings revenue guidance`, "International financial media", "Google News", 14, INTERNATIONAL_FINANCIAL_DOMAINS),
@@ -1274,26 +1891,275 @@ function buildSearchPlans(query: string, language: BriefLanguage): SearchPlan[] 
   ]);
 }
 
+function providerLabelForPlan(plan: SearchPlan) {
+  if (plan.provider === "marketaux") return "Marketaux";
+  if (plan.provider === "alphavantage") return "Alpha Vantage";
+  if (plan.provider === "serpapi") return "SerpAPI";
+  if (plan.provider === "googleRss") return "Google News RSS (personal demo)";
+  if (plan.provider === "sina") return "Sina Finance";
+  if (plan.provider === "yahoo") return "Yahoo Finance";
+  return "Tavily";
+}
+
+function providerEnvName(provider: SearchPlan["provider"]) {
+  if (provider === "marketaux") return "MARKETAUX_API_KEY";
+  if (provider === "alphavantage") return "ALPHAVANTAGE_API_KEY";
+  if (provider === "serpapi") return "SERPAPI_API_KEY";
+  if (provider === "googleRss") return "GOOGLE_NEWS_RSS_PERSONAL_DEMO=true";
+  if (provider === "tavily") return "TAVILY_API_KEY or SEARCH_API_KEY";
+  return null;
+}
+
+function buildSearchDiagnostics(
+  plans: SearchPlan[],
+  raw: RawResult[],
+  availableApiProviders: Partial<Record<SearchPlan["provider"], boolean>>,
+  providerFailures: ProviderFailures = {},
+): SearchDiagnostic[] {
+  return plans.map((plan) => {
+    const requiresKey = providerEnvName(plan.provider);
+    const available = requiresKey ? Boolean(availableApiProviders[plan.provider]) : true;
+    const resultCount = raw.filter((item) => item.searchMode === plan.mode && item.searchQuery === plan.query).length;
+    const failure = providerFailures[plan.provider];
+    return {
+      provider: providerLabelForPlan(plan),
+      mode: plan.mode,
+      query: plan.query,
+      category: plan.category,
+      // A configured key is not evidence that the provider actually returned news.
+      // Keep an empty response visible so coverage gaps cannot masquerade as success.
+      status: !available ? "skipped" : failure ? "failed" : resultCount > 0 ? "used" : "empty",
+      resultCount,
+      error: !available ? `Missing ${requiresKey}` : failure ?? (resultCount === 0 ? "No results returned" : undefined),
+    };
+  });
+}
+
+function googleNewsRssEnabled() {
+  return process.env.GOOGLE_NEWS_RSS_PERSONAL_DEMO === "true";
+}
+
+function providerFailureMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "Provider request failed";
+  return message.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
 export async function searchTencentNews(query: string, range: TimeRange, language: BriefLanguage) {
-  const company = buildCompanyContext(query);
-  const searches = buildSearchPlans(query, language);
+  const company = await resolveCompanyContext(query, language);
+  const searches = buildSearchPlans(company, language);
+  const marketauxApiKey = process.env.MARKETAUX_API_KEY;
+  const alphaVantageApiKey = process.env.ALPHAVANTAGE_API_KEY;
   const serpApiKey = process.env.SERPAPI_API_KEY;
   const tavilyApiKey = process.env.TAVILY_API_KEY ?? process.env.SEARCH_API_KEY;
+  const rssEnabled = googleNewsRssEnabled();
+  const providerFailures: ProviderFailures = {};
+  const recordFailure = (provider: SearchPlan["provider"], error: unknown) => {
+    providerFailures[provider] ??= providerFailureMessage(error);
+  };
 
-  if (!serpApiKey && !tavilyApiKey) {
-    throw new Error("Missing SERPAPI_API_KEY or TAVILY_API_KEY. This demo needs a live search provider.");
-  }
-
+  const marketauxSearches = searches.filter((plan) => plan.provider === "marketaux");
+  const alphaVantageSearches = searches.filter((plan) => plan.provider === "alphavantage");
   const serpSearches = searches.filter((plan) => plan.provider === "serpapi");
   const tavilySearches = searches.filter((plan) => plan.provider === "tavily");
   const sinaSearches = searches.filter((plan) => plan.provider === "sina");
   const yahooSearches = searches.filter((plan) => plan.provider === "yahoo");
-  const serpRaw = serpApiKey ? await searchWithSerpApi(serpSearches, range, language, serpApiKey) : [];
-  const tavilyRaw = tavilyApiKey ? await searchWithTavily(tavilySearches, range, tavilyApiKey) : [];
-  const sinaRaw = await searchWithSinaFinance(sinaSearches);
-  const yahooRaw = await searchWithYahooFinance(yahooSearches);
+  const googleRssSearches = searches.filter((plan) => plan.provider === "googleRss");
+  const [marketauxRaw, alphaVantageRaw, yahooRaw, sinaRaw, tavilyRaw, serpRaw, googleRssRaw] = await Promise.all([
+    marketauxApiKey ? searchWithMarketaux(marketauxSearches, range, language, marketauxApiKey, company) : Promise.resolve([]),
+    alphaVantageApiKey ? searchWithAlphaVantage(alphaVantageSearches, range, alphaVantageApiKey) : Promise.resolve([]),
+    searchWithYahooFinance(yahooSearches),
+    searchWithSinaFinance(sinaSearches),
+    tavilyApiKey ? searchWithTavily(tavilySearches, range, tavilyApiKey) : Promise.resolve([]),
+    serpApiKey ? searchWithSerpApi(serpSearches, range, language, serpApiKey, (error) => recordFailure("serpapi", error)) : Promise.resolve([]),
+    rssEnabled ? searchWithGoogleNewsRss(googleRssSearches, range, language, (error) => recordFailure("googleRss", error)) : Promise.resolve([]),
+  ]);
 
-  return normalizeAndFilterResults([...sinaRaw, ...yahooRaw, ...serpRaw, ...tavilyRaw], range, language, company, searches);
+  const raw = [...marketauxRaw, ...alphaVantageRaw, ...yahooRaw, ...sinaRaw, ...tavilyRaw, ...serpRaw, ...googleRssRaw];
+  const diagnostics = buildSearchDiagnostics(searches, raw, {
+    marketaux: Boolean(marketauxApiKey),
+    alphavantage: Boolean(alphaVantageApiKey),
+    serpapi: Boolean(serpApiKey),
+    tavily: Boolean(tavilyApiKey),
+    googleRss: rssEnabled,
+  }, providerFailures);
+
+  return normalizeAndFilterResults(raw, range, language, company, diagnostics);
+}
+
+async function searchWithMarketaux(
+  searches: SearchPlan[],
+  range: TimeRange,
+  language: BriefLanguage,
+  apiKey: string,
+  company: CompanyContext,
+): Promise<RawResult[]> {
+  const responseSettled = await runSettledInBatches(
+    searches,
+    async (plan) => {
+      const requests = buildMarketauxUrls(plan, range, language, apiKey, company);
+      const responses = await Promise.all(
+        requests.map(async (url) => {
+          const response = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0 VerifiedEquityBrief/0.1" },
+            cache: "no-store",
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Marketaux failed: ${response.status} ${text.slice(0, 240)}`);
+          }
+          return (await response.json()) as { data?: MarketauxArticle[] };
+        }),
+      );
+      return { plan, data: responses.flatMap((response) => response.data ?? []) };
+    },
+    2,
+  );
+
+  return responseSettled
+    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; data: MarketauxArticle[] }> =>
+      result.status === "fulfilled",
+    )
+    .flatMap((result) =>
+      result.value.data
+        .filter((item): item is MarketauxArticle & { title: string; url: string } => Boolean(item.title && item.url))
+        .map((item) => {
+          const snippet = item.snippet || item.description || "";
+          return {
+            title: item.title.trim(),
+            url: item.url,
+            snippet: snippet.trim(),
+            content: snippet.slice(0, 1000).trim(),
+            publishedDate: item.published_at ?? null,
+            category: categoryForUrl(item.url, result.value.plan.category),
+            searchProvider: "Marketaux",
+            searchMode: "Marketaux" as const,
+            searchQuery: result.value.plan.query,
+          };
+        }),
+    );
+}
+
+function buildMarketauxUrls(
+  plan: SearchPlan,
+  range: TimeRange,
+  language: BriefLanguage,
+  apiKey: string,
+  company: CompanyContext,
+) {
+  const baseParams = {
+    api_token: apiKey,
+    language: language === "zh" ? "zh" : "en",
+    published_after: formatIsoDate(cutoffForRange(range)),
+    limit: String(plan.maxResults ?? 50),
+    group_similar: "true",
+  };
+  const urls: string[] = [];
+
+  if (plan.symbols?.length) {
+    const params = new URLSearchParams({
+      ...baseParams,
+      symbols: plan.symbols.join(","),
+      filter_entities: "true",
+      must_have_entities: "true",
+    });
+    urls.push(`https://api.marketaux.com/v1/news/all?${params.toString()}`);
+  }
+
+  const search = marketauxSearchQuery(plan.query, company);
+  if (search) {
+    const params = new URLSearchParams({
+      ...baseParams,
+      search,
+    });
+    urls.push(`https://api.marketaux.com/v1/news/all?${params.toString()}`);
+  }
+
+  return urls;
+}
+
+function marketauxSearchQuery(query: string, company: CompanyContext) {
+  const entityTerms = [company.displayName, ...company.aliases, company.usTicker, company.hkTicker, company.cnTicker]
+    .filter((item): item is string => Boolean(item))
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const eventTerms = ["earnings", "revenue", "buyback", "regulation", "AI", "deal", "回购", "监管", "业绩", "合作"];
+  const queryTerms = query
+    .split(/\s+OR\s+|\s+/i)
+    .map((item) => item.replace(/[()]/g, "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const entities = [...new Set([...entityTerms, ...queryTerms])];
+  return `(${entities.join("|")}) (${eventTerms.join("|")})`;
+}
+
+async function searchWithAlphaVantage(searches: SearchPlan[], range: TimeRange, apiKey: string): Promise<RawResult[]> {
+  const responseSettled = await runSettledInBatches(
+    searches,
+    async (plan) => {
+      const ticker = plan.symbols?.[0] ?? plan.query;
+      const params = new URLSearchParams({
+        function: "NEWS_SENTIMENT",
+        tickers: ticker,
+        time_from: formatAlphaVantageTime(cutoffForRange(range)),
+        sort: "LATEST",
+        limit: String(plan.maxResults ?? 50),
+        apikey: apiKey,
+      });
+      const response = await fetch(`https://www.alphavantage.co/query?${params.toString()}`, {
+        headers: { "User-Agent": "Mozilla/5.0 VerifiedEquityBrief/0.1" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Alpha Vantage failed: ${response.status} ${text.slice(0, 240)}`);
+      }
+      const data = (await response.json()) as {
+        feed?: AlphaVantageArticle[];
+        Information?: string;
+        Note?: string;
+        "Error Message"?: string;
+      };
+      if (data["Error Message"] || data.Note || data.Information) {
+        throw new Error(data["Error Message"] ?? data.Note ?? data.Information);
+      }
+      return { plan, data: data.feed ?? [] };
+    },
+    2,
+  );
+
+  return responseSettled
+    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; data: AlphaVantageArticle[] }> =>
+      result.status === "fulfilled",
+    )
+    .flatMap((result) =>
+      result.value.data
+        .filter((item): item is AlphaVantageArticle & { title: string; url: string } => Boolean(item.title && item.url))
+        .map((item) => ({
+          title: item.title.trim(),
+          url: item.url,
+          snippet: (item.summary ?? "").trim(),
+          content: (item.summary ?? "").slice(0, 1000).trim(),
+          publishedDate: parseAlphaVantageDate(item.time_published),
+          category: categoryForUrl(item.url, result.value.plan.category),
+          searchProvider: "Alpha Vantage News Sentiment",
+          searchMode: "Alpha Vantage" as const,
+          searchQuery: result.value.plan.query,
+        })),
+    );
+}
+
+function formatAlphaVantageTime(date: Date) {
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}T0000`;
+}
+
+function parseAlphaVantageDate(value?: string) {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})(\d{2})(\d{2})T/);
+  if (!match) return null;
+  return `${match[1]}-${match[2]}-${match[3]}`;
 }
 
 async function searchWithYahooFinance(searches: SearchPlan[]): Promise<RawResult[]> {
@@ -1344,9 +2210,10 @@ async function searchWithYahooFinance(searches: SearchPlan[]): Promise<RawResult
             typeof item.providerPublishTime === "number"
               ? new Date(item.providerPublishTime * 1000).toISOString().slice(0, 10)
               : null,
-          category: result.value.plan.category,
+          category: categoryForUrl(String(item.link), result.value.plan.category),
           searchProvider: "Yahoo Finance",
           searchMode: "Yahoo Finance" as const,
+          searchQuery: result.value.plan.query,
         })),
     );
 }
@@ -1355,29 +2222,107 @@ async function searchWithSinaFinance(searches: SearchPlan[]): Promise<RawResult[
   const responseSettled = await runSettledInBatches(
     searches,
     async (plan) => {
-      const symbol = plan.query.toUpperCase();
-      const response = await fetch(`https://stock.finance.sina.com.cn/usstock/quotes/${symbol}.html`, {
-        headers: { "User-Agent": "Mozilla/5.0 EquityResearchCopilot/0.1" },
-        cache: "no-store",
-        signal: AbortSignal.timeout(12000),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Sina Finance failed: ${response.status} ${text.slice(0, 240)}`);
-      }
-      const buffer = await response.arrayBuffer();
-      const html = new TextDecoder("gb18030").decode(buffer);
-      return { plan, html };
+      const urls = sinaCompanyNewsUrls(plan.query);
+      const htmls = await Promise.all(
+        urls.map(async (url) => {
+          const response = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0 VerifiedEquityBrief/0.1" },
+            cache: "no-store",
+            signal: AbortSignal.timeout(12000),
+          });
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Sina Finance failed: ${response.status} ${text.slice(0, 240)}`);
+          }
+          const buffer = await response.arrayBuffer();
+          return new TextDecoder("gb18030").decode(buffer);
+        }),
+      );
+      return { plan, htmls };
     },
     2,
   );
 
   return responseSettled
-    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; html: string }> => result.status === "fulfilled")
-    .flatMap((result) => extractSinaStockPageNews(result.value.html, result.value.plan));
+    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; htmls: string[] }> => result.status === "fulfilled")
+    .flatMap((result) => result.value.htmls.flatMap((html) => extractSinaStockPageNews(html, result.value.plan)));
+}
+
+function sinaCompanyNewsUrls(input: string) {
+  const ticker = input.toUpperCase().trim();
+  const hkMatch = ticker.match(/^(\d{1,5})(?:\.HK)?$/);
+  if (hkMatch) {
+    return [`https://stock.finance.sina.com.cn/hkstock/news/${hkMatch[1].padStart(5, "0")}.html`];
+  }
+
+  if (/^(?:60|68|00|30)\d{4}$/.test(ticker)) {
+    const exchange = ticker.startsWith("60") || ticker.startsWith("68") ? "sh" : "sz";
+    return [`https://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllNewsStock/symbol/${exchange}${ticker}.phtml`];
+  }
+
+  return [
+    `https://biz.finance.sina.com.cn/usstock/usstock_news.php?symbol=${ticker}`,
+    `https://stock.finance.sina.com.cn/usstock/quotes/${ticker}.html`,
+  ];
 }
 
 function extractSinaStockPageNews(html: string, plan: SearchPlan): RawResult[] {
+  const datedItems = [...html.matchAll(/<li>\s*<span[^>]+class=["']xb_list_r["'][^>]*>([^<]+)<\/span>\s*<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+    .map((match) => {
+      const dateEvidence = normalizeDateEvidence(
+        match[1] ? { value: match[1], source: "page-metadata" } : null,
+      );
+      return {
+        title: match[3].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
+        url: absolutizeUrl(match[2]),
+        publishedDate: dateEvidence?.value ?? inferDateFromUrl(match[2])?.value ?? null,
+      };
+    })
+    .filter((item) => item.title && item.url)
+    .map((item) => ({
+      title: item.title,
+      url: item.url,
+      snippet: item.title,
+      content: item.title,
+      publishedDate: item.publishedDate,
+      category: categoryForUrl(item.url, plan.category),
+      searchProvider: "Sina Finance Company News",
+      searchMode: "Sina Finance" as const,
+      searchQuery: plan.query,
+    }));
+
+  const hkNewsItems = [...html.matchAll(
+    /<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>\s*<span[^>]*class=["']rt["'][^>]*>(20\d{2}-\d{1,2}-\d{1,2})(?:\s+\d{1,2}:\d{2}:?\d{0,2})?<\/span>/gi,
+  )]
+    .map((match) => ({
+      title: match[2].replace(/&nbsp;/g, " ").trim(),
+      url: absolutizeUrl(match[1]),
+      publishedDate: normalizeDateEvidence(match[3] ? { value: match[3], source: "page-metadata" } : null)?.value ?? null,
+    }))
+    .filter((item) => item.title && item.url);
+
+  const cnNewsItems = [...html.matchAll(
+    /(20\d{2}-\d{1,2}-\d{1,2})(?:&nbsp;|\s)+(?:\d{1,2}:\d{2})(?:&nbsp;|\s)+<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+  )]
+    .map((match) => ({
+      title: match[3].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
+      url: absolutizeUrl(match[2]),
+      publishedDate: normalizeDateEvidence(match[1] ? { value: match[1], source: "page-metadata" } : null)?.value ?? null,
+    }))
+    .filter((item) => item.title && item.url);
+
+  const pageDatedItems = [...hkNewsItems, ...cnNewsItems].map((item) => ({
+    title: item.title,
+    url: item.url,
+    snippet: item.title,
+    content: item.title,
+    publishedDate: item.publishedDate,
+    category: categoryForUrl(item.url, plan.category),
+    searchProvider: "Sina Finance Company News",
+    searchMode: "Sina Finance" as const,
+    searchQuery: plan.query,
+  }));
+
   const links = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
     .map((match) => ({
       url: absolutizeUrl(match[1]),
@@ -1386,13 +2331,13 @@ function extractSinaStockPageNews(html: string, plan: SearchPlan): RawResult[] {
     .filter((item) => item.title && item.url);
 
   const seen = new Set<string>();
-  return links
+  const fallbackItems = links
     .filter((item) => {
       if (seen.has(item.url)) return false;
       seen.add(item.url);
       return /finance\.sina\.com\.cn|cj\.sina\.cn|t\.cj\.sina\.cn/.test(item.url);
     })
-    .filter((item) => !/更多|公司新闻|公司资讯|研究报告|财经首页|美股首页|行情中心/.test(item.title))
+    .filter((item) => !/更多|公司新闻|公司资讯|研究报告|财经首页|美股首页|行情中心|中国概念股|添加自选|在APP中查看/.test(item.title))
     .slice(0, plan.maxResults ?? 20)
     .map((item) => ({
       title: item.title,
@@ -1400,10 +2345,13 @@ function extractSinaStockPageNews(html: string, plan: SearchPlan): RawResult[] {
       snippet: item.title,
       content: item.title,
       publishedDate: inferDateFromUrl(item.url)?.value ?? null,
-      category: plan.category,
+      category: categoryForUrl(item.url, plan.category),
       searchProvider: "Sina Finance Stock Page",
       searchMode: "Sina Finance" as const,
+      searchQuery: plan.query,
     }));
+
+  return [...datedItems, ...pageDatedItems, ...fallbackItems];
 }
 
 function absolutizeUrl(url: string) {
@@ -1441,7 +2389,7 @@ async function searchWithTavily(searches: SearchPlan[], range: TimeRange, apiKey
       }
 
       return {
-        category: plan.category,
+        plan,
         data: (await response.json()) as { results?: TavilyResult[] },
       };
     },
@@ -1449,7 +2397,7 @@ async function searchWithTavily(searches: SearchPlan[], range: TimeRange, apiKey
   );
 
   return responseSettled
-    .filter((result): result is PromiseFulfilledResult<{ category: SourceCategory; data: { results?: TavilyResult[] } }> =>
+    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; data: { results?: TavilyResult[] } }> =>
       result.status === "fulfilled",
     )
     .flatMap((result) =>
@@ -1461,9 +2409,10 @@ async function searchWithTavily(searches: SearchPlan[], range: TimeRange, apiKey
           snippet: (item.content ?? "").trim(),
           content: (item.raw_content ?? item.content ?? "").slice(0, 800).trim(),
           publishedDate: item.published_date ?? null,
-          category: result.value.category,
+          category: categoryForUrl(item.url, result.value.plan.category),
           searchProvider: "Tavily",
-          searchMode: "Tavily",
+          searchMode: "Tavily" as const,
+          searchQuery: result.value.plan.query,
         })),
     );
 }
@@ -1473,10 +2422,15 @@ async function searchWithSerpApi(
   range: TimeRange,
   language: BriefLanguage,
   apiKey: string,
+  onFailure?: (error: unknown) => void,
 ): Promise<RawResult[]> {
-  const responseSettled = await runSettledInBatches(
-    searches,
-    async (plan) => {
+  const results: RawResult[] = [];
+  let firstFailure: unknown = null;
+
+  for (let index = 0; index < searches.length; index += 3) {
+    const batch = searches.slice(index, index + 3);
+    const responseSettled = await Promise.allSettled(
+      batch.map(async (plan) => {
       const response = await fetch(buildSerpApiUrl(plan, range, language, apiKey), {
         cache: "no-store",
         signal: AbortSignal.timeout(15000),
@@ -1487,19 +2441,149 @@ async function searchWithSerpApi(
         throw new Error(`SerpAPI failed: ${response.status} ${text.slice(0, 240)}`);
       }
 
+      const data = (await response.json()) as Record<string, unknown>;
+      const providerError = firstText(data.error, data.error_message, data.message);
+      if (providerError) throw new Error(`SerpAPI: ${providerError}`);
+
       return {
         plan,
-        data: (await response.json()) as Record<string, unknown>,
+        data,
       };
+      }),
+    );
+
+    const rejected = responseSettled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (rejected) {
+      firstFailure ??= rejected.reason;
+      if (/run out of searches|quota|plan limit|account.*searches/i.test(providerFailureMessage(rejected.reason))) {
+        onFailure?.(rejected.reason);
+        break;
+      }
+    }
+
+    results.push(
+      ...responseSettled
+        .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; data: Record<string, unknown> }> => result.status === "fulfilled")
+        .flatMap((result) => extractSerpApiResults(result.value.data, result.value.plan)),
+    );
+  }
+
+  if (results.length === 0 && firstFailure) onFailure?.(firstFailure);
+  return results;
+}
+
+function rssText(value: string | undefined) {
+  if (!value) return "";
+  return value
+    .replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/i, "$1")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function rssTag(item: string, tag: string) {
+  const match = item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  return rssText(match?.[1]);
+}
+
+function parseGoogleNewsRss(xml: string): GoogleNewsRssItem[] {
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)]
+    .map((match) => {
+      const item = match[1];
+      const sourceMatch = item.match(/<source[^>]*url=["']([^"']+)["'][^>]*>([\s\S]*?)<\/source>/i);
+      const title = rssTag(item, "title");
+      const googleUrl = rssTag(item, "link");
+      return {
+        title,
+        googleUrl,
+        publisherUrl: sourceMatch?.[1] ? rssText(sourceMatch[1]) : null,
+        snippet: rssTag(item, "description"),
+        publishedDate: rssTag(item, "pubDate") || null,
+      };
+    })
+    .filter((item) => Boolean(item.title && item.googleUrl));
+}
+
+function isGoogleRssPublisherAllowed(item: GoogleNewsRssItem, plan: SearchPlan, language: BriefLanguage) {
+  if (!item.publisherUrl) return false;
+  const category = categoryForUrl(item.publisherUrl, plan.category);
+  if (!isAllowedUrl(item.publisherUrl, category, language)) return false;
+  return !plan.includeDomains?.length || matchesDomain(item.publisherUrl, plan.includeDomains);
+}
+
+async function decodeGoogleNewsUrls(urls: string[]) {
+  // This package only transforms Google News redirect URLs to their publisher URLs.
+  // It does not supply article content or bypass the downstream admission checks.
+  const { GoogleDecoder } = require("google-news-url-decoder") as {
+    GoogleDecoder: new () => { decodeBatch: (sourceUrls: string[]) => Promise<GoogleNewsDecodeResult[]> };
+  };
+  const decoder = new GoogleDecoder();
+  return decoder.decodeBatch(urls);
+}
+
+async function searchWithGoogleNewsRss(
+  searches: SearchPlan[],
+  range: TimeRange,
+  language: BriefLanguage,
+  onFailure?: (error: unknown) => void,
+): Promise<RawResult[]> {
+  const responseSettled = await runSettledInBatches(
+    searches,
+    async (plan): Promise<RawResult[]> => {
+      const params = new URLSearchParams({
+        q: `${plan.query} when:${rangeWhen(range)}`.trim(),
+        hl: language === "zh" ? "zh-CN" : "en-US",
+        gl: language === "zh" ? "CN" : "US",
+        ceid: language === "zh" ? "CN:zh-Hans" : "US:en",
+      });
+      const response = await fetch(`https://news.google.com/rss/search?${params.toString()}`, {
+        headers: { "User-Agent": "Mozilla/5.0 VerifiedEquityBrief/0.1" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error(`Google News RSS failed: ${response.status}`);
+
+      const items = parseGoogleNewsRss(await response.text())
+        .filter((item) => isGoogleRssPublisherAllowed(item, plan, language))
+        .slice(0, plan.maxResults ?? 12);
+      if (items.length === 0) return [];
+      const decoded = await decodeGoogleNewsUrls(items.map((item) => item.googleUrl));
+
+      return items.flatMap((item, index) => {
+        const url = decoded[index]?.status ? decoded[index]?.decoded_url : null;
+        if (!url) return [];
+        const category = categoryForUrl(url, plan.category);
+        if (!isAllowedUrl(url, category, language)) return [];
+        if (plan.includeDomains?.length && !matchesDomain(url, plan.includeDomains)) return [];
+        return [{
+          title: item.title,
+          url,
+          snippet: item.snippet,
+          content: item.snippet.slice(0, 800),
+          publishedDate: item.publishedDate,
+          category,
+          searchProvider: "Google News RSS (personal demo)",
+          searchMode: "Google News RSS" as const,
+          searchQuery: plan.query,
+        } satisfies RawResult];
+      });
     },
-    3,
+    2,
   );
 
-  return responseSettled
-    .filter((result): result is PromiseFulfilledResult<{ plan: SearchPlan; data: Record<string, unknown> }> =>
-      result.status === "fulfilled",
-    )
-    .flatMap((result) => extractSerpApiResults(result.value.data, result.value.plan));
+  const results = responseSettled
+    .filter((result): result is PromiseFulfilledResult<RawResult[]> => result.status === "fulfilled")
+    .flatMap((result) => result.value);
+  const failure = responseSettled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (results.length === 0 && failure) onFailure?.(failure.reason);
+  return results;
 }
 
 async function runSettledInBatches<T, R>(
@@ -1530,14 +2614,10 @@ function buildSerpApiUrl(plan: SearchPlan, range: TimeRange, language: BriefLang
   }
 
   if (plan.mode === "Google News") {
-    params.set("engine", "google");
-    params.set("tbm", "nws");
-    params.set("hl", "zh-CN");
-    params.set("gl", "hk");
-    params.set("num", String(plan.maxResults ?? 10));
+    params.set("engine", "google_news");
     params.set("hl", language === "zh" ? "zh-CN" : "en");
-    params.set("gl", language === "zh" ? "hk" : "us");
-    params.set("q", plan.query);
+    params.set("gl", language === "zh" ? "cn" : "us");
+    params.set("q", `${plan.query} when:${rangeWhen(range)}`.trim());
     return `https://serpapi.com/search.json?${params.toString()}`;
   }
 
@@ -1583,9 +2663,10 @@ function extractSerpApiResults(data: Record<string, unknown>, plan: SearchPlan):
             item.published_at,
             item.displayed_date,
           ),
-          category: plan.category,
+          category: categoryForUrl(String(item.link ?? item.url), plan.category),
           searchProvider: plan.mode === "Bing News" ? "SerpAPI Bing News" : `SerpAPI ${plan.mode}`,
           searchMode: plan.mode,
+          searchQuery: plan.query,
         };
       });
 }
@@ -1652,7 +2733,7 @@ async function normalizeAndFilterResults(
   range: TimeRange,
   language: BriefLanguage,
   company: CompanyContext,
-  searchPlans: SearchPlan[],
+  searchDiagnostics: SearchDiagnostic[],
 ): Promise<NormalizedResults> {
   const seen = new Set<string>();
   const seenTitles = new Set<string>();
@@ -1685,13 +2766,22 @@ async function normalizeAndFilterResults(
       usableForClaims: false,
       snippet: result.snippet,
       content: result.content,
-      category: result.category,
+      category: categoryForUrl(url, result.category),
     });
   }
 
-  const enriched = await Promise.all(
-    articles.map(async (article) => {
-      if (isAllowedSource(article, language)) {
+  // Article pages are only used for date verification. Screen obvious noise first,
+  // then bound page fetches so broad recall does not become a slow crawler.
+  const dateCandidates = articles
+    .filter((article) => isAllowedSource(article, language))
+    .filter((article) => !isLowQuality(article) && !isGenericSourcePage(article) && !isNonCoreFinancialNoise(article))
+    .filter((article) => directCompanyMentionInTitleOrSnippet(article, company))
+    .sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company))
+    .slice(0, 36);
+  const dateEnrichment = await runSettledInBatches(
+    dateCandidates,
+    async (article) => {
+      if (!article.publishedDate && isAllowedSource(article, language)) {
         const pageDate = await extractPublishedDateFromPage(article.url);
         if (pageDate) {
           return {
@@ -1714,8 +2804,16 @@ async function normalizeAndFilterResults(
       }
 
       return article;
-    }),
+    },
+    6,
   );
+  const enrichedByUrl = new Map<string, Article>();
+  for (let index = 0; index < dateEnrichment.length; index += 1) {
+    const result = dateEnrichment[index];
+    const original = dateCandidates[index];
+    enrichedByUrl.set(original.url, result.status === "fulfilled" ? result.value : original);
+  }
+  const enriched = articles.map((article) => enrichedByUrl.get(article.url) ?? article);
 
   let rejectedLowQualitySources = 0;
   let dateUnverifiedSources = 0;
@@ -1745,8 +2843,9 @@ async function normalizeAndFilterResults(
     .filter((article) => article.usableForClaims || (language === "zh" && article.dateStatus === "unverified"))
     .sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company));
 
-  const filtered = diversifyArticlesByEvent(filteredBeforeDiversification, 24)
-    .map((article, index) => ({ ...article, id: index + 1, eventClusterId: eventKey(article) }));
+  const clustered = assignEventClusters(filteredBeforeDiversification, language, company);
+  const filtered = diversifyArticlesByEvent(clustered, 24)
+    .map((article, index) => ({ ...article, id: index + 1 }));
   const eventClusters = buildEventClusters(filtered, language);
 
   const sourceMix = filtered.reduce<Record<string, number>>((counts, article) => {
@@ -1771,19 +2870,8 @@ async function normalizeAndFilterResults(
     rejectedIrrelevantSources,
     tierCounts,
     eventClusters,
-    searchDiagnostics: searchPlans.map((plan) => ({
-      provider:
-        plan.provider === "serpapi"
-          ? "SerpAPI"
-          : plan.provider === "sina"
-            ? "Sina Finance"
-            : plan.provider === "yahoo"
-              ? "Yahoo Finance"
-              : "Tavily",
-      mode: plan.mode,
-      query: plan.query,
-      category: plan.category,
-    })),
+    searchDiagnostics,
+    company,
   };
 }
 
@@ -1796,6 +2884,11 @@ function safeParseJson(text: string) {
   return JSON.parse(cleaned);
 }
 
+function deepSeekModel() {
+  const requestedModel = process.env.DEEPSEEK_MODEL?.trim();
+  return requestedModel === "deepseek-chat" || requestedModel === "deepseek-reasoner" ? requestedModel : "deepseek-chat";
+}
+
 async function repairJson(raw: string, apiKey: string) {
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
@@ -1804,7 +2897,7 @@ async function repairJson(raw: string, apiKey: string) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro",
+      model: deepSeekModel(),
       temperature: 0,
       max_tokens: 3000,
       response_format: { type: "json_object" },
@@ -1921,6 +3014,21 @@ function articleSummary(article: Article) {
   return article.snippet || article.content || article.title;
 }
 
+function conservativeKeyNewsItem(article: Article, company: CompanyContext, language: BriefLanguage): KeyNewsItem {
+  return {
+    title: article.title,
+    date: article.publishedDate,
+    source: article.source,
+    summary: articleSummary(article),
+    whyItMatters:
+      language === "zh"
+        ? `该条目是所选时间范围内与${companyLabel(company, language)}直接相关的已验证新闻；其后续影响仍需结合新增披露和独立来源判断。`
+        : `This is a date-verified item directly related to ${company.displayName} in the selected window; its implications should be assessed with subsequent disclosures and independent reporting.`,
+    sentiment: sentimentForTitle(article.title),
+    sourceLink: article.url,
+  };
+}
+
 function companyLabel(company: CompanyContext, language: BriefLanguage) {
   if (company.isTencent && language === "zh") return "腾讯";
   return company.displayName;
@@ -1953,6 +3061,26 @@ function sentimentForTitle(title: string): KeyNewsItem["sentiment"] {
   return "Neutral";
 }
 
+function evidenceConfidenceScore(articles: Article[], eventClusters: EventCluster[], citedClaims: number) {
+  if (articles.length === 0) return 0;
+
+  const tier1 = articles.filter((article) => article.sourceTier === 1).length;
+  const tier2 = articles.filter((article) => article.sourceTier === 2).length;
+  const independentSources = new Set(articles.map((article) => article.source)).size;
+  let score = 18;
+  score += Math.min(35, tier1 * 14 + tier2 * 7 + (articles.length - tier1 - tier2) * 2);
+  score += Math.min(18, independentSources * 6);
+  score += Math.min(15, eventClusters.length * 4);
+  score += Math.min(12, citedClaims * 2);
+
+  // No Tier 1 coverage or a single publisher can still be useful, but should
+  // never look equivalent to independently confirmed primary reporting.
+  if (tier1 === 0) score = Math.min(score, 78);
+  if (independentSources === 1) score = Math.min(score, 58);
+  if (eventClusters.length === 1) score = Math.min(score, 65);
+  return Math.max(20, Math.min(95, Math.round(score)));
+}
+
 function fallbackBriefFromArticles({
   articlesRetrieved,
   duplicatesRemoved,
@@ -1982,7 +3110,7 @@ function fallbackBriefFromArticles({
   company: CompanyContext;
   reason: string;
 }): ResearchBrief {
-  const selected = articles.slice(0, 4);
+  const selected = articles;
   const label = companyLabel(company, language);
   const aiArticles = selected.filter((article) => /ai|wechat|weixin|微信|小微|data center|gpu|chip/i.test(article.title));
   const gamingArticles = selected.filter((article) => /game|gaming|studio|marvelous|游戏|工作室/i.test(article.title));
@@ -2089,14 +3217,15 @@ function fallbackBriefFromArticles({
       duplicatesRemoved,
       claimsWithCitations,
       unverifiedClaimsRemoved: 0,
-      confidenceScore: Math.min(80, 45 + articles.length * 5),
-      notes: [
+      confidenceScore: evidenceConfidenceScore(articles, eventClusters, claimsWithCitations),
+      notes: compactNotes([
+        companyResolutionNote(company, language),
         reason,
         language === "zh"
           ? "生成内容采用保守兜底：仅复述已检索新闻，不补充外部事实。"
           : "Fallback mode used: the brief only restates retrieved news and adds no external facts.",
         sourceMixNote(sourceMix, language),
-      ],
+      ]),
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
@@ -2164,7 +3293,7 @@ function insufficientGeneratedBrief({
       duplicatesRemoved,
       claimsWithCitations: 0,
       unverifiedClaimsRemoved: 0,
-      confidenceScore: Math.min(35, articles.length * 6),
+      confidenceScore: evidenceConfidenceScore(articles, eventClusters, 0),
       notes: [reason, sourceMixNote(sourceMix, language)],
       dateUnverifiedSources,
       rejectedLowQualitySources,
@@ -2182,7 +3311,6 @@ function insufficientGeneratedBrief({
 }
 
 export async function generateBrief(query: string, range: TimeRange, language: BriefLanguage): Promise<ResearchBrief> {
-  const company = buildCompanyContext(query);
   const {
     articlesRetrieved,
     duplicatesRemoved,
@@ -2194,8 +3322,23 @@ export async function generateBrief(query: string, range: TimeRange, language: B
     tierCounts,
     eventClusters,
     searchDiagnostics,
+    company,
   } = await searchTencentNews(query, range, language);
-  const usableArticles = articles.filter((article) => article.usableForClaims);
+  // Tier 3 sources are useful leads for the audit trail, but an equity brief
+  // cannot be built solely on aggregation or market-data pages.
+  const usableArticles = articles.filter((article) => article.usableForClaims && article.sourceTier <= 2);
+  const usableEventClusters = buildEventClusters(usableArticles, language);
+  const usableTierCounts = usableArticles.reduce<Record<SourceTier, number>>(
+    (counts, article) => {
+      counts[article.sourceTier] += 1;
+      return counts;
+    },
+    { 1: 0, 2: 0, 3: 0 },
+  );
+  const usableSourceMix = usableArticles.reduce<Record<string, number>>((counts, article) => {
+    counts[article.category] = (counts[article.category] ?? 0) + 1;
+    return counts;
+  }, {});
 
   if (usableArticles.length === 0) {
     return {
@@ -2215,12 +3358,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
         claimsWithCitations: 0,
         unverifiedClaimsRemoved: 0,
         confidenceScore: 0,
-        notes: [
+        notes: compactNotes([
+          companyResolutionNote(company, language),
           language === "zh"
             ? "过滤后少于两篇日期可验证的相关来源；系统不会编造新闻。"
             : "Fewer than two relevant articles were available after filtering.",
           sourceMixNote(sourceMix, language),
-        ],
+        ]),
         dateUnverifiedSources,
         rejectedLowQualitySources,
         rejectedIrrelevantSources,
@@ -2241,13 +3385,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       articlesRetrieved,
       duplicatesRemoved,
       articles: usableArticles,
-      sourceMix,
+      sourceMix: usableSourceMix,
       language,
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
-      tierCounts,
-      eventClusters,
+      tierCounts: usableTierCounts,
+      eventClusters: usableEventClusters,
       searchDiagnostics,
       company,
       reason:
@@ -2261,9 +3405,9 @@ export async function generateBrief(query: string, range: TimeRange, language: B
   if (!apiKey) {
     throw new Error("Missing DEEPSEEK_API_KEY.");
   }
-  const requestedModel = process.env.DEEPSEEK_MODEL?.trim();
-  const model =
-    requestedModel === "deepseek-chat" || requestedModel === "deepseek-reasoner" ? requestedModel : "deepseek-chat";
+  const model = deepSeekModel();
+  const selectedPeriod = briefPeriodDescription(range, language);
+  const aiKeyNewsLimit = aiKeyNewsAnnotationLimit(range);
 
   const articlePayload = usableArticles.map((article) => ({
     id: article.id,
@@ -2303,8 +3447,8 @@ export async function generateBrief(query: string, range: TimeRange, language: B
             content: JSON.stringify({
               task:
                 language === "zh"
-                  ? `Create a concise verified news brief for ${company.displayName} in Simplified Chinese. Return only JSON.`
-                  : `Create a concise verified news brief for ${company.displayName} in English. Return only JSON.`,
+                  ? `Create a concise verified news brief for ${company.displayName} in Simplified Chinese covering ${selectedPeriod}. Return only JSON.`
+                  : `Create a concise verified news brief for ${company.displayName} in English covering ${selectedPeriod}. Return only JSON.`,
               company: {
                 displayName: company.displayName,
                 aliases: company.aliases,
@@ -2315,9 +3459,9 @@ export async function generateBrief(query: string, range: TimeRange, language: B
                   : "Write all natural-language brief fields in English.",
                 "Executive summary must have 3 to 5 bullets, each with citations.",
                 "Keep the brief concise: executive bullets under 35 words, key news summaries under 55 words, why-it-matters under 45 words.",
-                "Return no more than 4 keyNews items.",
+                `Return no more than ${aiKeyNewsLimit} editorial keyNews annotations. The application will display every verified article separately.`,
                 "Return no more than 2 bullets for each follow-up bucket.",
-                "Key news items must come directly from supplied articles and should cover different event clusters when possible.",
+                "Key news items must come directly from supplied articles, cover different event clusters when possible, and represent earlier as well as later material events when the selected window is longer than seven days.",
                 "Prefer Tier 1 and Tier 2 sources when selecting key news. Use Tier 3 only when the item is clearly relevant and no stronger source covers the same event.",
                 "Focus on newsworthy events reported by financial media. Do not treat filings, PDFs, stock quote pages, company profile pages, or broker target-price tables as news.",
                 "Separate facts from interpretation.",
@@ -2345,7 +3489,7 @@ export async function generateBrief(query: string, range: TimeRange, language: B
                 },
               },
               articles: articlePayload,
-              eventClusters,
+              eventClusters: usableEventClusters,
             }),
           },
         ],
@@ -2359,13 +3503,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
         articlesRetrieved,
         duplicatesRemoved,
         articles: usableArticles,
-        sourceMix,
+        sourceMix: usableSourceMix,
         language,
         dateUnverifiedSources,
         rejectedLowQualitySources,
         rejectedIrrelevantSources,
-        tierCounts,
-        eventClusters,
+        tierCounts: usableTierCounts,
+        eventClusters: usableEventClusters,
         searchDiagnostics,
         company,
         reason:
@@ -2382,13 +3526,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       articlesRetrieved,
       duplicatesRemoved,
       articles: usableArticles,
-      sourceMix,
+      sourceMix: usableSourceMix,
       language,
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
-      tierCounts,
-      eventClusters,
+      tierCounts: usableTierCounts,
+      eventClusters: usableEventClusters,
       searchDiagnostics,
       company,
       reason:
@@ -2403,13 +3547,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       articlesRetrieved,
       duplicatesRemoved,
       articles: usableArticles,
-      sourceMix,
+      sourceMix: usableSourceMix,
       language,
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
-      tierCounts,
-      eventClusters,
+      tierCounts: usableTierCounts,
+      eventClusters: usableEventClusters,
       searchDiagnostics,
       company,
       reason:
@@ -2430,13 +3574,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
         articlesRetrieved,
         duplicatesRemoved,
         articles: usableArticles,
-        sourceMix,
+        sourceMix: usableSourceMix,
         language,
         dateUnverifiedSources,
         rejectedLowQualitySources,
         rejectedIrrelevantSources,
-        tierCounts,
-        eventClusters,
+        tierCounts: usableTierCounts,
+        eventClusters: usableEventClusters,
         searchDiagnostics,
         company,
         reason:
@@ -2450,30 +3594,27 @@ export async function generateBrief(query: string, range: TimeRange, language: B
   const implications = cleanImplications(parsed.investmentImplications, usableArticles);
   const articleById = new Map(usableArticles.map((article) => [article.id, article]));
 
-  const keyNews: KeyNewsItem[] = Array.isArray(parsed.keyNews)
-    ? parsed.keyNews
-        .map((item) => {
-          const object = item as Record<string, unknown>;
-          const article = articleById.get(Number(object.articleId));
-          if (!article) return null;
-          const sentiment: KeyNewsItem["sentiment"] =
-            object.sentiment === "Positive" || object.sentiment === "Negative" ? object.sentiment : "Neutral";
-          return {
-            title: typeof object.title === "string" && object.title.trim() ? object.title.trim() : article.title,
-            date: typeof object.date === "string" ? object.date : article.publishedDate,
-            source: article.source,
-            summary: typeof object.summary === "string" ? object.summary.trim() : article.snippet,
-            whyItMatters:
-              typeof object.whyItMatters === "string"
-                ? object.whyItMatters.trim()
-                : `Relevant to ${company.displayName}'s operating outlook.`,
-            sentiment,
-            sourceLink: article.url,
-          };
-        })
-        .filter((item): item is NonNullable<typeof item> => Boolean(item))
-        .slice(0, 4)
-    : [];
+  const annotatedKeyNews = new Map<number, KeyNewsItem>();
+  if (Array.isArray(parsed.keyNews)) {
+    for (const item of parsed.keyNews) {
+      const object = item as Record<string, unknown>;
+      const article = articleById.get(Number(object.articleId));
+      if (!article || annotatedKeyNews.has(article.id)) continue;
+      const fallback = conservativeKeyNewsItem(article, company, language);
+      annotatedKeyNews.set(article.id, {
+        ...fallback,
+        summary: typeof object.summary === "string" && object.summary.trim() ? object.summary.trim() : fallback.summary,
+        whyItMatters:
+          typeof object.whyItMatters === "string" && object.whyItMatters.trim()
+            ? object.whyItMatters.trim()
+            : fallback.whyItMatters,
+        sentiment: object.sentiment === "Positive" || object.sentiment === "Negative" ? object.sentiment : fallback.sentiment,
+      });
+    }
+  }
+  const keyNews = [...usableArticles]
+    .sort((left, right) => compareDateDesc(left.publishedDate, right.publishedDate))
+    .map((article) => annotatedKeyNews.get(article.id) ?? conservativeKeyNewsItem(article, company, language));
 
   const claimsWithCitations = countClaims({
     executiveSummary,
@@ -2489,9 +3630,9 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       0,
     );
   const unverifiedClaimsRemoved = Math.max(0, originalClaimEstimate - claimsWithCitations);
-  const confidenceScore = Math.min(
-    95,
-    Math.max(25, Math.round(articles.length * 7 + claimsWithCitations * 6 - unverifiedClaimsRemoved * 10)),
+  const confidenceScore = Math.max(
+    0,
+    evidenceConfidenceScore(usableArticles, usableEventClusters, claimsWithCitations) - unverifiedClaimsRemoved * 8,
   );
 
   if (executiveSummary.length === 0 || keyNews.length === 0) {
@@ -2499,13 +3640,13 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       articlesRetrieved,
       duplicatesRemoved,
       articles: usableArticles,
-      sourceMix,
+      sourceMix: usableSourceMix,
       language,
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
-      tierCounts,
-      eventClusters,
+      tierCounts: usableTierCounts,
+      eventClusters: usableEventClusters,
       searchDiagnostics,
       company,
       reason:
@@ -2527,24 +3668,25 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       claimsWithCitations,
       unverifiedClaimsRemoved,
       confidenceScore,
-      notes: [
+      notes: compactNotes([
+        companyResolutionNote(company, language),
         language === "zh"
           ? "所有展示结论均已校验为引用了检索到的文章 ID。"
           : "All rendered claims were checked for citations against retrieved article IDs.",
         language === "zh" ? "单一来源结论会在界面标注。" : "Single-source claims are labeled in the UI.",
-        sourceMixNote(sourceMix, language),
-      ],
+        sourceMixNote(usableSourceMix, language),
+      ]),
       dateUnverifiedSources,
       rejectedLowQualitySources,
       rejectedIrrelevantSources,
-      tier1Sources: tierCounts[1],
-      tier2Sources: tierCounts[2],
-      tier3Sources: tierCounts[3],
-      eventsFound: eventClusters.length,
+      tier1Sources: usableTierCounts[1],
+      tier2Sources: usableTierCounts[2],
+      tier3Sources: usableTierCounts[3],
+      eventsFound: usableEventClusters.length,
       searchQueriesRun: searchDiagnostics.length,
     },
-    sources: articles,
-    eventClusters,
+    sources: usableArticles,
+    eventClusters: usableEventClusters,
     searchDiagnostics,
   };
 }

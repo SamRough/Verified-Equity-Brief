@@ -1,26 +1,29 @@
 {
-  "name": "equity-research-copilot",
+  "name": "verified-equity-brief",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.17.0",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "verify:retrieval": "node scripts/retrieval-acceptance.mjs"
   },
   "dependencies": {
-    "next": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "google-news-url-decoder": "1.2.2",
+    "next": "16.2.9",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "latest",
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "eslint": "^9.39.1",
-    "eslint-config-next": "latest",
-    "tailwindcss": "latest",
-    "typescript": "latest"
+    "@tailwindcss/postcss": "4.3.1",
+    "@types/node": "26.0.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "4.3.1",
+    "typescript": "6.0.3"
   }
 }
