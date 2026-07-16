@@ -1,7 +1,16 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import type { BriefLanguage, ResearchBrief, SummaryBullet, TimeRange } from "@/lib/types";
+import { FormEvent, useMemo, useState, type ReactNode } from "react";
+import type {
+  Article,
+  BriefLanguage,
+  EventCluster,
+  KeyNewsItem,
+  ResearchBrief,
+  SourceCategory,
+  SummaryBullet,
+  TimeRange,
+} from "@/lib/types";
 
 const ranges: { value: TimeRange; label: Record<BriefLanguage, string> }[] = [
   { value: "today", label: { en: "Today", zh: "今日" } },
@@ -15,201 +24,108 @@ const languages: { value: BriefLanguage; label: string }[] = [
   { value: "zh", label: "中文" },
 ];
 
-function briefTitle(range: TimeRange, language: BriefLanguage) {
-  const titles: Record<BriefLanguage, Record<TimeRange, string>> = {
-    en: {
-      today: "Today’s News Brief",
-      week: "This Week’s News Brief",
-      last7: "7-Day News Brief",
-      last30: "30-Day News Brief",
-    },
-    zh: {
-      today: "今日新闻简报",
-      week: "本周新闻简报",
-      last7: "过去 7 天新闻简报",
-      last30: "过去 30 天新闻简报",
-    },
-  };
-  return titles[language][range];
-}
-
 const copy = {
   en: {
+    eyebrow: "Verified news intelligence",
+    subtitle: "Date-qualified, source-linked news for public-equity research.",
+    evidenceFirst: "Evidence first",
     company: "Company or ticker",
     timeRange: "Time range",
     language: "Brief language",
-    generate: "Search News",
-    generating: "Verifying news...",
-    noCitedClaims: "No cited claims available.",
+    generate: "Find verified news",
+    generating: "Verifying sources...",
+    result: "Research result",
+    citedBrief: "Cited Brief",
+    noCitedClaims: "No cited summary was available from the verified source set.",
     insufficient: "Insufficient verified sources found.",
-    sourceVerification: "Verification status",
-    keyNews: "All Verified News",
-    investmentImplications: "Research Follow-up",
-    positiveFactors: "Constructive developments",
-    negativeFactors: "Pressure points",
-    watchItems: "Watch items",
-    sourceList: "Verified source library",
-    eventClusters: "Event Clusters",
-    searchStrategy: "Retrieval audit",
-    auditTrail: "Audit trail",
-    auditHint: "Source library, event grouping, and provider diagnostics",
-    verifiedSources: "verified sources",
+    verifiedFeed: "Verified News Feed",
+    noKeyNews: "No verified news was retained for this period.",
+    source: "Source",
+    sourceLink: "Open source",
+    dateVerified: "date verified",
+    dateNotProvided: "Date unavailable",
+    evidence: "Evidence",
+    articles: "articles",
     events: "events",
-    cited: "cited claims",
-    sources: "sources",
-    latest: "latest",
-    representative: "representative",
-    category: "Category",
-    searchMode: "Search mode",
-    dateUnverified: "Date unverified",
-    rejectedSources: "Rejected sources",
-    rejectedIrrelevant: "Irrelevant removed",
-    tier1Sources: "Tier 1 sources",
-    tier2Sources: "Tier 2 sources",
-    tier3Sources: "Tier 3 sources",
-    eventsFound: "Events found",
-    searchQueriesRun: "Search queries",
-    sourceTier: "Source tier",
-    provider: "Provider",
-    status: "Status",
+    citedClaims: "cited claims",
+    confidence: "confidence",
+    singleSource: "single-source",
+    publishers: "publishers",
+    audit: "Retrieval Audit",
+    rawCandidates: "raw candidates",
+    duplicatesRemoved: "duplicates removed",
+    excludedClaims: "uncited claims removed",
+    rejectedSources: "low-quality sources rejected",
+    irrelevantRemoved: "irrelevant results removed",
+    dateUnverified: "dates not verified",
+    sourceMix: "Source quality",
+    eventMap: "Event coverage",
+    providerStatus: "Provider status",
+    noEvents: "No event clusters were retained.",
+    noDiagnostics: "No provider diagnostics were returned.",
+    status: "status",
     results: "results",
+    verifiedPeriod: "Verified period",
+    languageLabel: "Brief",
+    coverage: "coverage",
     tier1: "Tier 1",
     tier2: "Tier 2",
     tier3: "Tier 3",
-    notUsedForClaims: "not used for claims",
-    articlesRetrieved: "Raw candidates",
-    articlesUsed: "Verified sources",
-    duplicatesRemoved: "Duplicates removed",
-    citedClaims: "Cited claims",
-    unverifiedRemoved: "Unverified removed",
-    confidence: "Confidence",
-    dateNotProvided: "Date not provided",
-    dateSource: "date source",
-    whyItMatters: "Why it matters: ",
-    noKeyNews: "No cited key news available.",
-    disclaimer: "The brief is limited to verified news context. It does not provide investment advice, ratings, or target prices.",
-    singleSource: "single-source",
-    subtitle: "A verified news intelligence tool for equity research workflows",
-    badge: "Strict source filtering, verified dates, no invented news",
-    liveDemo: "Live Demo",
+    category: "Source type",
+    dateEvidence: "Date evidence",
+    footer: "News summaries are limited to the retrieved source set. This tool does not provide investment advice.",
   },
   zh: {
+    eyebrow: "可信新闻情报",
+    subtitle: "面向股票研究的日期验证、来源直达新闻工具。",
+    evidenceFirst: "证据优先",
     company: "公司或股票代码",
     timeRange: "时间范围",
     language: "简报语言",
     generate: "查找可信新闻",
-    generating: "正在验证新闻...",
-    noCitedClaims: "暂无带引用的结论。",
+    generating: "正在验证来源...",
+    result: "检索结果",
+    citedBrief: "带引用简报",
+    noCitedClaims: "已验证来源中暂无可引用的摘要。",
     insufficient: "未找到足够的可验证来源。",
-    sourceVerification: "验证状态",
-    keyNews: "全部已验证新闻",
-    investmentImplications: "研究跟踪",
-    positiveFactors: "积极进展",
-    negativeFactors: "压力因素",
-    watchItems: "观察事项",
-    sourceList: "已验证来源库",
-    eventClusters: "新闻事件簇",
-    searchStrategy: "检索审计",
-    auditTrail: "审计明细",
-    auditHint: "来源库、事件归类与检索接口记录",
-    verifiedSources: "已验证来源",
-    events: "新闻事件",
-    cited: "带引用结论",
-    sources: "来源",
-    latest: "最新日期",
-    representative: "代表来源",
-    category: "来源类型",
-    searchMode: "搜索模式",
+    verifiedFeed: "已验证新闻流",
+    noKeyNews: "该时间范围内没有保留下来的已验证新闻。",
+    source: "来源",
+    sourceLink: "打开来源",
+    dateVerified: "日期已验证",
+    dateNotProvided: "日期不可用",
+    evidence: "证据",
+    articles: "篇文章",
+    events: "个事件",
+    citedClaims: "条带引用结论",
+    confidence: "置信度",
+    singleSource: "单一来源",
+    publishers: "家媒体",
+    audit: "检索审计",
+    rawCandidates: "原始候选",
+    duplicatesRemoved: "去重数量",
+    excludedClaims: "移除无引用结论",
+    rejectedSources: "拒绝低质量来源",
+    irrelevantRemoved: "移除无关结果",
     dateUnverified: "日期未验证",
-    rejectedSources: "已拒绝来源",
-    rejectedIrrelevant: "无关剔除",
-    tier1Sources: "一级来源",
-    tier2Sources: "二级来源",
-    tier3Sources: "三级来源",
-    eventsFound: "事件数量",
-    searchQueriesRun: "搜索查询数",
-    sourceTier: "来源层级",
-    provider: "来源接口",
+    sourceMix: "来源质量",
+    eventMap: "事件覆盖",
+    providerStatus: "接口状态",
+    noEvents: "没有保留下来的事件聚类。",
+    noDiagnostics: "没有返回接口诊断信息。",
     status: "状态",
-    results: "结果",
+    results: "条结果",
+    verifiedPeriod: "验证范围",
+    languageLabel: "简报",
+    coverage: "覆盖",
     tier1: "一级",
     tier2: "二级",
     tier3: "三级",
-    notUsedForClaims: "不用于生成结论",
-    articlesRetrieved: "原始候选数",
-    articlesUsed: "通过验证来源",
-    duplicatesRemoved: "去重数量",
-    citedClaims: "有引用结论",
-    unverifiedRemoved: "移除未验证结论",
-    confidence: "置信度",
-    dateNotProvided: "未提供日期",
-    dateSource: "日期来源",
-    whyItMatters: "为何重要：",
-    noKeyNews: "暂无带引用的重点新闻。",
-    disclaimer: "简报仅基于已验证新闻背景生成，不提供投资建议、评级或目标价。",
-    singleSource: "单一来源",
-    subtitle: "面向股票研究流程的可信新闻筛选与简报工具",
-    badge: "严格来源过滤、验证日期、不编造新闻",
-    liveDemo: "现场 Demo",
+    category: "来源类型",
+    dateEvidence: "日期依据",
+    footer: "新闻摘要仅限于检索到的来源集合；本工具不提供投资建议。",
   },
 };
-
-function CitationLinks({ bullet, singleSourceLabel }: { bullet: SummaryBullet; singleSourceLabel: string }) {
-  return (
-    <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
-      {bullet.citations.map((citation) => (
-        <a
-          key={citation.articleId}
-          href={citation.url}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded border border-teal-400/30 bg-teal-400/10 px-1.5 py-0.5 text-[11px] font-semibold text-teal-200 hover:bg-teal-400/20"
-          title={citation.title}
-        >
-          S{citation.articleId}
-        </a>
-      ))}
-      {bullet.singleSource ? (
-        <span className="rounded border border-amber-300/30 bg-amber-300/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-100">
-          {singleSourceLabel}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function BulletList({
-  items,
-  emptyLabel,
-  singleSourceLabel,
-}: {
-  items: SummaryBullet[];
-  emptyLabel: string;
-  singleSourceLabel: string;
-}) {
-  if (items.length === 0) {
-    return <p className="text-sm text-slate-400">{emptyLabel}</p>;
-  }
-
-  return (
-    <ul className="space-y-3">
-      {items.map((item, index) => (
-        <li key={`${item.text}-${index}`} className="text-sm leading-6 text-slate-200">
-          <span className="text-slate-500">- </span>
-          {item.text}
-          <CitationLinks bullet={item} singleSourceLabel={singleSourceLabel} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function displaySentiment(sentiment: ResearchBrief["keyNews"][number]["sentiment"], language: BriefLanguage) {
-  if (language === "en") return sentiment;
-  if (sentiment === "Positive") return "正面";
-  if (sentiment === "Negative") return "负面";
-  return "中性";
-}
 
 function displayTier(tier: number, language: BriefLanguage) {
   if (language === "zh") {
@@ -218,6 +134,29 @@ function displayTier(tier: number, language: BriefLanguage) {
     return "三级";
   }
   return `Tier ${tier}`;
+}
+
+function displayCategory(category: SourceCategory, language: BriefLanguage) {
+  if (language === "en") return category;
+  const labels: Record<SourceCategory, string> = {
+    "Official / Exchange": "公司 / 交易所",
+    Regulator: "监管机构",
+    "Chinese financial media": "中文财经媒体",
+    "HK financial media": "香港财经媒体",
+    "International financial media": "国际财经媒体",
+    "General news": "综合新闻",
+  };
+  return labels[category];
+}
+
+function displayDateEvidence(source: Article["dateSource"], language: BriefLanguage) {
+  const labels: Record<Article["dateSource"], Record<BriefLanguage, string>> = {
+    "search-api": { en: "search feed", zh: "检索接口" },
+    "page-metadata": { en: "page metadata", zh: "页面元数据" },
+    url: { en: "source URL", zh: "来源链接" },
+    unavailable: { en: "unavailable", zh: "不可用" },
+  };
+  return labels[source][language];
 }
 
 function displaySearchStatus(status: ResearchBrief["searchDiagnostics"][number]["status"], language: BriefLanguage) {
@@ -229,47 +168,269 @@ function displaySearchStatus(status: ResearchBrief["searchDiagnostics"][number][
 }
 
 function tierClassName(tier: number) {
-  if (tier === 1) return "border-teal-300/40 bg-teal-300/10 text-teal-100";
+  if (tier === 1) return "border-teal-300/35 bg-teal-300/10 text-teal-100";
   if (tier === 2) return "border-sky-300/35 bg-sky-300/10 text-sky-100";
   return "border-amber-300/35 bg-amber-300/10 text-amber-100";
 }
 
-function Panel({
-  title,
-  children,
-  className = "",
-}: {
-  title: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
+function CitationLinks({ bullet, language }: { bullet: SummaryBullet; language: BriefLanguage }) {
+  const t = copy[language];
   return (
-    <section className={`border border-slate-700 bg-slate-900/70 p-5 shadow-sm ${className}`}>
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-[0.14em] text-slate-300">{title}</h2>
-      {children}
+    <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
+      {bullet.citations.map((citation) => (
+        <a
+          key={citation.articleId}
+          href={citation.url}
+          target="_blank"
+          rel="noreferrer"
+          className="border border-teal-300/35 bg-teal-300/10 px-1.5 py-0.5 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-300/20"
+          title={citation.title}
+        >
+          S{citation.articleId}
+        </a>
+      ))}
+      {bullet.singleSource ? (
+        <span className="border border-amber-300/35 bg-amber-300/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-100">
+          {t.singleSource}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function CitedBrief({ items, language }: { items: SummaryBullet[]; language: BriefLanguage }) {
+  const t = copy[language];
+  return (
+    <section className="border-t border-slate-700 pt-4">
+      <SectionHeading title={t.citedBrief} />
+      {items.length === 0 ? (
+        <p className="text-sm text-slate-400">{t.noCitedClaims}</p>
+      ) : (
+        <ul className="space-y-3">
+          {items.map((item, index) => (
+            <li key={`${item.text}-${index}`} className="text-[15px] leading-7 text-slate-200">
+              <span className="mr-2 text-teal-200">{String(index + 1).padStart(2, "0")}</span>
+              {item.text}
+              <CitationLinks bullet={item} language={language} />
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
 
-function EvidenceMetric({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
+function SectionHeading({ title, aside }: { title: string; aside?: ReactNode }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+      <h2 className="text-sm font-semibold text-slate-100">{title}</h2>
+      {aside ? <div className="text-xs text-slate-500">{aside}</div> : null}
+    </div>
+  );
+}
+
+function EvidenceStat({ label, value, accent = false }: { label: string; value: string | number; accent?: boolean }) {
   return (
     <div className="min-w-0 border-l border-slate-700 pl-3 first:border-l-0 first:pl-0">
-      <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-slate-500">{label}</p>
-      <p className={`mt-1 text-xl font-semibold ${accent ? "text-teal-200" : "text-slate-100"}`}>{value}</p>
+      <dt className="text-[11px] font-medium text-slate-500">{label}</dt>
+      <dd className={`mt-1 text-xl font-semibold ${accent ? "text-teal-100" : "text-slate-100"}`}>{value}</dd>
     </div>
+  );
+}
+
+function AuditStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="border-t border-slate-800 py-3">
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd className="mt-1 text-lg font-semibold text-slate-100">{value}</dd>
+    </div>
+  );
+}
+
+type FeedEntry = {
+  item: KeyNewsItem;
+  source: Article | undefined;
+  event: EventCluster | undefined;
+};
+
+function groupNewsByDate(entries: FeedEntry[], language: BriefLanguage) {
+  const groups = new Map<string, FeedEntry[]>();
+  for (const entry of entries) {
+    const key = entry.item.date ?? entry.source?.publishedDate ?? "unavailable";
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  return Array.from(groups.entries()).map(([date, items]) => ({
+    date,
+    label: date === "unavailable" ? copy[language].dateNotProvided : date,
+    items,
+  }));
+}
+
+function renderSourceSnippet(text: string) {
+  return text
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function NewsFeed({ brief, language }: { brief: ResearchBrief; language: BriefLanguage }) {
+  const t = copy[language];
+  const groups = useMemo(() => {
+    const sourceByUrl = new Map(brief.sources.map((source) => [source.url, source]));
+    const eventById = new Map(brief.eventClusters.map((event) => [event.id, event]));
+    const entries = brief.keyNews.map((item) => {
+      const source = sourceByUrl.get(item.sourceLink);
+      return { item, source, event: source ? eventById.get(source.eventClusterId) : undefined };
+    });
+    return groupNewsByDate(entries, language);
+  }, [brief, language]);
+
+  return (
+    <section className="border-t border-slate-700 pt-4">
+      <SectionHeading title={t.verifiedFeed} aside={`${brief.keyNews.length} ${t.articles}`} />
+      {groups.length === 0 ? (
+        <p className="text-sm text-slate-400">{t.noKeyNews}</p>
+      ) : (
+        <div>
+          {groups.map((group) => (
+            <div key={group.date} className="grid gap-3 border-t border-slate-800 py-5 md:grid-cols-[108px_1fr] md:gap-6">
+              <p className="text-xs font-semibold text-slate-400">{group.label}</p>
+              <div className="divide-y divide-slate-800 border-t border-slate-800">
+                {group.items.map(({ item, source, event }) => (
+                  <article key={item.sourceLink} className="py-5 first:pt-4 last:pb-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <span className="font-medium text-slate-300">{item.source}</span>
+                      {source ? (
+                        <span className={`border px-1.5 py-0.5 font-semibold ${tierClassName(source.sourceTier)}`}>
+                          {displayTier(source.sourceTier, language)}
+                        </span>
+                      ) : null}
+                      {source ? <span>{displayCategory(source.category, language)}</span> : null}
+                      {event ? (
+                        <span className={event.sourceCount === 1 ? "text-amber-100" : "text-teal-100"}>
+                          {event.sourceCount === 1 ? t.singleSource : `${event.sourceCount} ${t.publishers}`}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-start md:justify-between md:gap-6">
+                      <a
+                        href={item.sourceLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-base font-semibold leading-6 text-slate-100 transition hover:text-teal-100"
+                      >
+                        {item.title}
+                      </a>
+                      <a
+                        href={item.sourceLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="w-fit shrink-0 text-xs font-semibold text-teal-200 hover:text-teal-100"
+                      >
+                        {t.sourceLink}
+                      </a>
+                    </div>
+                    <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-300">
+                      {renderSourceSnippet(source?.snippet || item.summary)}
+                    </p>
+                    {source ? (
+                      <p className="mt-3 text-xs text-slate-500">
+                        {t.dateVerified}: {displayDateEvidence(source.dateSource, language)}
+                      </p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RetrievalAudit({ brief, language }: { brief: ResearchBrief; language: BriefLanguage }) {
+  const t = copy[language];
+  const verification = brief.sourceVerification;
+  return (
+    <details className="border-t border-slate-700 pt-4">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-200 hover:text-teal-100">{t.audit}</summary>
+      <div className="mt-5 grid gap-8 lg:grid-cols-[0.78fr_1.22fr]">
+        <dl className="grid grid-cols-2 gap-x-5">
+          <AuditStat label={t.rawCandidates} value={verification.articlesRetrieved} />
+          <AuditStat label={t.duplicatesRemoved} value={verification.duplicatesRemoved} />
+          <AuditStat label={t.excludedClaims} value={verification.unverifiedClaimsRemoved} />
+          <AuditStat label={t.rejectedSources} value={verification.rejectedLowQualitySources ?? 0} />
+          <AuditStat label={t.irrelevantRemoved} value={verification.rejectedIrrelevantSources ?? 0} />
+          <AuditStat label={t.dateUnverified} value={verification.dateUnverifiedSources ?? 0} />
+        </dl>
+        <div className="grid gap-7">
+          <div>
+            <SectionHeading title={t.sourceMix} />
+            <div className="flex flex-wrap gap-2">
+              {([1, 2, 3] as const).map((tier) => (
+                <span key={tier} className={`border px-2 py-1 text-xs font-semibold ${tierClassName(tier)}`}>
+                  {displayTier(tier, language)} {verification[`tier${tier}Sources` as const] ?? 0}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <SectionHeading title={t.eventMap} />
+            {brief.eventClusters.length === 0 ? (
+              <p className="text-sm text-slate-500">{t.noEvents}</p>
+            ) : (
+              <div className="divide-y divide-slate-800 border-y border-slate-800">
+                {brief.eventClusters.map((event) => (
+                  <div key={event.id} className="flex flex-wrap items-baseline justify-between gap-x-5 gap-y-1 py-3 text-sm">
+                    <p className="font-medium text-slate-200">{event.label}</p>
+                    <p className="text-xs text-slate-500">
+                      {event.latestDate ?? t.dateNotProvided} · {event.sourceCount} {t.publishers} · {event.representativeSource}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <SectionHeading title={t.providerStatus} />
+            {brief.searchDiagnostics.length === 0 ? (
+              <p className="text-sm text-slate-500">{t.noDiagnostics}</p>
+            ) : (
+              <div className="divide-y divide-slate-800 border-y border-slate-800">
+                {brief.searchDiagnostics.map((item, index) => (
+                  <div key={`${item.provider}-${item.mode}-${item.query}-${index}`} className="flex flex-wrap items-baseline justify-between gap-x-5 gap-y-1 py-3 text-xs">
+                    <p className="font-medium text-slate-300">{item.provider} · {item.mode}</p>
+                    <p className={item.status === "failed" ? "text-amber-100" : "text-slate-500"}>
+                      {displaySearchStatus(item.status, language) ?? t.status}
+                      {typeof item.resultCount === "number" ? ` · ${item.resultCount} ${t.results}` : ""}
+                      {item.error ? ` · ${item.error}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </details>
   );
 }
 
 export default function Home() {
   const [query, setQuery] = useState("Tencent");
+  const [submittedQuery, setSubmittedQuery] = useState("Tencent");
   const [range, setRange] = useState<TimeRange>("last7");
   const [briefRange, setBriefRange] = useState<TimeRange | null>(null);
   const [language, setLanguage] = useState<BriefLanguage>("en");
   const [brief, setBrief] = useState<ResearchBrief | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
   const t = copy[language];
+  const selectedRange = ranges.find((item) => item.value === (briefRange ?? range));
 
   async function generate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -285,10 +446,9 @@ export default function Home() {
         body: JSON.stringify({ query, range, language }),
       });
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error ?? "Failed to generate brief.");
-      }
+      if (!response.ok) throw new Error(data.error ?? "Failed to generate brief.");
       setBrief(data);
+      setSubmittedQuery(query.trim() || "Tencent");
       setBriefRange(range);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate brief.");
@@ -298,291 +458,113 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#071019] text-slate-100">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8">
-        <header className="border-b border-slate-800 pb-4">
-          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-200">{t.liveDemo}</p>
-              <h1 className="mt-1 text-3xl font-semibold tracking-normal text-white sm:text-4xl">
-                Verified Equity Brief
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm text-slate-400">
-                {t.subtitle}
-              </p>
-            </div>
-            <div className="w-fit border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300">
-              {t.badge}
-            </div>
+    <main className="min-h-screen bg-[#080c12] text-slate-100">
+      <div className="mx-auto w-full max-w-[1180px] px-5 py-7 sm:px-8 lg:px-10 lg:py-9">
+        <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold text-teal-200">{t.eyebrow}</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Verified Equity Brief</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">{t.subtitle}</p>
           </div>
+          <span className="w-fit border border-teal-300/25 bg-teal-300/10 px-2.5 py-1 text-xs font-semibold text-teal-100">
+            {t.evidenceFirst}
+          </span>
         </header>
 
         <form
           onSubmit={generate}
-          className="grid gap-3 border border-slate-700 bg-slate-900/80 p-4 shadow-sm md:grid-cols-[1fr_155px_130px_164px]"
+          className="mt-6 grid gap-3 border-y border-slate-700 bg-[#0c131c] px-4 py-4 md:grid-cols-[minmax(0,1fr)_150px_125px_auto] md:items-end"
         >
-          <label className="flex flex-col gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.company}</span>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-slate-400">{t.company}</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="h-11 rounded border border-slate-600 bg-slate-950 px-3 text-sm text-white outline-none ring-0 transition focus:border-teal-300"
+              className="h-11 border border-slate-600 bg-[#080c12] px-3 text-sm text-white outline-none transition focus:border-teal-300"
               placeholder="Tencent, 0700.HK, AMD..."
             />
           </label>
-          <label className="flex flex-col gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.timeRange}</span>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-slate-400">{t.timeRange}</span>
             <select
               value={range}
               onChange={(event) => setRange(event.target.value as TimeRange)}
-              className="h-11 rounded border border-slate-600 bg-slate-950 px-3 text-sm text-white outline-none transition focus:border-teal-300"
+              className="h-11 border border-slate-600 bg-[#080c12] px-3 text-sm text-white outline-none transition focus:border-teal-300"
             >
               {ranges.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label[language]}
-                </option>
+                <option key={item.value} value={item.value}>{item.label[language]}</option>
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.language}</span>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-slate-400">{t.language}</span>
             <select
               value={language}
               onChange={(event) => setLanguage(event.target.value as BriefLanguage)}
-              className="h-11 rounded border border-slate-600 bg-slate-950 px-3 text-sm text-white outline-none transition focus:border-teal-300"
+              className="h-11 border border-slate-600 bg-[#080c12] px-3 text-sm text-white outline-none transition focus:border-teal-300"
             >
               {languages.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
+                <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
           </label>
           <button
             type="submit"
             disabled={loading}
-            className="mt-auto h-11 whitespace-nowrap rounded bg-teal-300 px-4 text-sm font-semibold leading-none text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
+            className="h-11 whitespace-nowrap bg-teal-300 px-5 text-sm font-semibold leading-none text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
           >
             {loading ? t.generating : t.generate}
           </button>
         </form>
 
-        {error ? (
-          <div className="rounded border border-red-400/40 bg-red-950/50 p-4 text-sm text-red-100">{error}</div>
-        ) : null}
+        {error ? <div className="mt-6 border border-red-400/40 bg-red-950/30 px-4 py-3 text-sm text-red-100">{error}</div> : null}
 
         {loading ? (
-          <div className="grid gap-4 lg:grid-cols-[1.5fr_0.8fr]">
-            <div className="h-64 animate-pulse rounded-lg border border-slate-800 bg-slate-900" />
-            <div className="h-64 animate-pulse rounded-lg border border-slate-800 bg-slate-900" />
+          <div className="mt-8 animate-pulse border-y border-slate-800 py-5">
+            <div className="h-3 w-32 bg-slate-800" />
+            <div className="mt-4 h-5 max-w-2xl bg-slate-800" />
+            <div className="mt-3 h-5 max-w-xl bg-slate-800" />
           </div>
         ) : null}
 
         {brief ? (
-          <>
+          <div className="mt-8 space-y-10">
+            <section className="border-y border-slate-700 py-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-5 gap-y-2">
+                <div>
+                  <p className="text-xs font-semibold text-slate-500">{t.result}</p>
+                  <h2 className="mt-1 text-xl font-semibold text-white">{submittedQuery}</h2>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                  <span>{t.verifiedPeriod}: {selectedRange?.label[language]}</span>
+                  <span>{t.languageLabel}: {language === "zh" ? "中文" : "English"}</span>
+                </div>
+              </div>
+              <dl className="mt-5 grid grid-cols-2 gap-y-4 sm:grid-cols-4">
+                <EvidenceStat label={t.articles} value={brief.sourceVerification.articlesUsed} accent />
+                <EvidenceStat label={t.events} value={brief.sourceVerification.eventsFound ?? brief.eventClusters.length} />
+                <EvidenceStat label={t.citedClaims} value={brief.sourceVerification.claimsWithCitations} />
+                <EvidenceStat label={t.confidence} value={`${brief.sourceVerification.confidenceScore}%`} />
+              </dl>
+            </section>
+
             {brief.status === "insufficient" ? (
-              <div className="rounded border border-amber-300/40 bg-amber-950/30 p-4 text-sm text-amber-100">
+              <section className="border-l-2 border-amber-300 bg-amber-300/5 px-4 py-4 text-sm leading-6 text-amber-100">
                 {brief.message ?? t.insufficient}
-              </div>
-            ) : null}
+              </section>
+            ) : (
+              <>
+                <CitedBrief items={brief.executiveSummary} language={language} />
+                <NewsFeed brief={brief} language={language} />
+              </>
+            )}
 
-            <div className="grid gap-5 lg:grid-cols-[1.5fr_0.8fr]">
-              <Panel title={briefTitle(briefRange ?? range, language)}>
-                <BulletList
-                  items={brief.executiveSummary}
-                  emptyLabel={t.noCitedClaims}
-                  singleSourceLabel={t.singleSource}
-                />
-              </Panel>
-
-              <Panel title={t.sourceVerification}>
-                <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4">
-                  <EvidenceMetric label={t.verifiedSources} value={brief.sourceVerification.articlesUsed} accent />
-                  <EvidenceMetric label={t.events} value={brief.sourceVerification.eventsFound ?? brief.eventClusters.length} />
-                  <EvidenceMetric label={t.cited} value={brief.sourceVerification.claimsWithCitations} />
-                  <EvidenceMetric label={t.confidence} value={brief.sourceVerification.confidenceScore} />
-                </div>
-                <details className="mt-5 border-t border-slate-800 pt-3">
-                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-400 hover:text-teal-200">
-                    {t.auditTrail}
-                  </summary>
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                    <Metric label={t.articlesRetrieved} value={brief.sourceVerification.articlesRetrieved} />
-                    <Metric label={t.duplicatesRemoved} value={brief.sourceVerification.duplicatesRemoved} />
-                    <Metric label={t.unverifiedRemoved} value={brief.sourceVerification.unverifiedClaimsRemoved} />
-                  {typeof brief.sourceVerification.dateUnverifiedSources === "number" ? (
-                    <Metric label={t.dateUnverified} value={brief.sourceVerification.dateUnverifiedSources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.rejectedLowQualitySources === "number" ? (
-                    <Metric label={t.rejectedSources} value={brief.sourceVerification.rejectedLowQualitySources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.rejectedIrrelevantSources === "number" ? (
-                    <Metric label={t.rejectedIrrelevant} value={brief.sourceVerification.rejectedIrrelevantSources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.tier1Sources === "number" ? (
-                    <Metric label={t.tier1Sources} value={brief.sourceVerification.tier1Sources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.tier2Sources === "number" ? (
-                    <Metric label={t.tier2Sources} value={brief.sourceVerification.tier2Sources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.tier3Sources === "number" ? (
-                    <Metric label={t.tier3Sources} value={brief.sourceVerification.tier3Sources} />
-                  ) : null}
-                  {typeof brief.sourceVerification.eventsFound === "number" ? (
-                    <Metric label={t.eventsFound} value={brief.sourceVerification.eventsFound} />
-                  ) : null}
-                  {typeof brief.sourceVerification.searchQueriesRun === "number" ? (
-                    <Metric label={t.searchQueriesRun} value={brief.sourceVerification.searchQueriesRun} />
-                  ) : null}
-                  </div>
-                </details>
-                <ul className="mt-4 space-y-2 border-t border-slate-800 pt-3 text-xs leading-5 text-slate-400">
-                  {brief.sourceVerification.notes.map((note) => (
-                    <li key={note}>- {note}</li>
-                  ))}
-                </ul>
-              </Panel>
-            </div>
-
-            <Panel title={t.keyNews}>
-              <div className="grid gap-4">
-                {brief.keyNews.length > 0 ? (
-                  brief.keyNews.map((item) => (
-                    <article key={`${item.title}-${item.sourceLink}`} className="border-l-2 border-l-teal-300/70 bg-slate-950 px-4 py-4">
-                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <a
-                            href={item.sourceLink}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-base font-semibold text-white hover:text-teal-200"
-                          >
-                            {item.title}
-                          </a>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {item.date ?? t.dateNotProvided} | {item.source}
-                          </p>
-                        </div>
-                        <span
-                          className={`w-fit rounded border px-2 py-1 text-xs font-semibold ${
-                            item.sentiment === "Positive"
-                              ? "border-teal-300/30 bg-teal-300/10 text-teal-100"
-                              : item.sentiment === "Negative"
-                                ? "border-red-300/30 bg-red-300/10 text-red-100"
-                                : "border-slate-500/40 bg-slate-700/40 text-slate-200"
-                          }`}
-                        >
-                          {displaySentiment(item.sentiment, language)}
-                        </span>
-                      </div>
-                      <p className="mt-3 text-sm leading-6 text-slate-300">{item.summary}</p>
-                      <p className="mt-3 text-sm leading-6 text-slate-400">
-                        <span className="font-semibold text-slate-300">{t.whyItMatters}</span>
-                        {item.whyItMatters}
-                      </p>
-                    </article>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-400">{t.noKeyNews}</p>
-                )}
-              </div>
-            </Panel>
-
-            <Panel title={t.investmentImplications}>
-              <div className="grid gap-5 md:grid-cols-3">
-                <div>
-                  <h3 className="mb-3 text-sm font-semibold text-teal-100">{t.positiveFactors}</h3>
-                  <BulletList
-                    items={brief.investmentImplications.positiveFactors}
-                    emptyLabel={t.noCitedClaims}
-                    singleSourceLabel={t.singleSource}
-                  />
-                </div>
-                <div>
-                  <h3 className="mb-3 text-sm font-semibold text-red-100">{t.negativeFactors}</h3>
-                  <BulletList
-                    items={brief.investmentImplications.negativeFactors}
-                    emptyLabel={t.noCitedClaims}
-                    singleSourceLabel={t.singleSource}
-                  />
-                </div>
-                <div>
-                  <h3 className="mb-3 text-sm font-semibold text-amber-100">{t.watchItems}</h3>
-                  <BulletList
-                    items={brief.investmentImplications.watchItems}
-                    emptyLabel={t.noCitedClaims}
-                    singleSourceLabel={t.singleSource}
-                  />
-                </div>
-              </div>
-              <p className="mt-5 border-t border-slate-800 pt-4 text-xs leading-5 text-slate-500">
-                {t.disclaimer}
-              </p>
-            </Panel>
-
-            <details className="border border-slate-700 bg-slate-900/50 px-5 py-4">
-              <summary className="cursor-pointer list-none">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-slate-200">{t.auditTrail}</span>
-                  <span className="text-xs text-slate-500">{t.auditHint}</span>
-                </div>
-              </summary>
-              <div className="mt-5 grid gap-5">
-                <div>
-                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.sourceList}</h2>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {brief.sources.map((source) => (
-                      <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="border border-slate-700 bg-slate-950 p-3 text-sm hover:border-teal-300/50">
-                        <p className="font-semibold leading-5 text-slate-100">S{source.id}: {source.title}</p>
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                          <span>{source.publishedDate ?? t.dateNotProvided}</span><span>{source.source}</span>
-                          <span className={`border px-1.5 py-0.5 text-[11px] font-semibold ${tierClassName(source.sourceTier)}`}>{displayTier(source.sourceTier, language)}</span>
-                        </div>
-                        {source.dateStatus === "unverified" || !source.usableForClaims ? <p className="mt-2 text-xs text-amber-100">{source.dateStatus === "unverified" ? t.dateUnverified : t.notUsedForClaims}</p> : null}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.eventClusters}</h2>
-                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                    {brief.eventClusters.map((cluster) => (
-                      <div key={cluster.id} className="border border-slate-700 bg-slate-950 p-3">
-                        <div className="flex items-start justify-between gap-3"><h3 className="text-sm font-semibold text-slate-100">{cluster.label}</h3><span className="text-xs text-slate-500">{cluster.sourceCount} {t.sources}</span></div>
-                        <p className="mt-2 text-xs text-slate-500">{t.latest}: {cluster.latestDate ?? t.dateNotProvided} | {cluster.representativeSource}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{t.searchStrategy}</h2>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {brief.searchDiagnostics.map((item, index) => (
-                      <div key={`${item.provider}-${item.mode}-${item.query}-${index}`} className="border border-slate-800 bg-slate-950 p-3">
-                        <div className="flex flex-wrap items-center gap-2"><p className="text-xs font-semibold text-slate-300">{item.provider} | {item.mode}</p>{item.status ? <span className="border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-300">{displaySearchStatus(item.status, language)}</span> : null}{typeof item.resultCount === "number" ? <span className="text-[11px] text-slate-500">{item.resultCount} {t.results}</span> : null}</div>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">{item.query}</p>
-                        {item.error ? <p className="mt-1 text-xs leading-5 text-amber-100">{item.error}</p> : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </details>
-
-          </>
+            <RetrievalAudit brief={brief} language={language} />
+          </div>
         ) : null}
+
+        <footer className="mt-10 border-t border-slate-800 pt-4 text-xs leading-5 text-slate-500">{t.footer}</footer>
       </div>
     </main>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded border border-slate-700 bg-slate-950 p-3">
-      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
-    </div>
   );
 }

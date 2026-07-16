@@ -13,7 +13,8 @@ AI research tools can hallucinate: they may invent news, mix old stories into a 
 - Chinese-source discovery uses a strict serious-source allowlist and rejects Baijiahao, portals, forums, social posts, search pages, and content-farm reposts.
 - Normalizes and filters results for company relevance, duplicate URLs, low-quality sources, event duplication, and selected time range.
 - The language selector controls brief presentation only. Every request builds one evidence pool from official, Chinese/HK, and international finance sources before rendering the brief in English or Simplified Chinese.
-- Shows the news candidates, event clusters, provider diagnostics, and evidence quality before the generated brief.
+- Shows a cited brief, every retained verified news source, event coverage, provider diagnostics, and evidence quality in one auditable result.
+- Keeps the working view focused on a cited brief, a complete date-grouped verified news feed, and a collapsible retrieval audit. Every distinct verified publisher/event pair remains in the feed; only the smaller LLM editorial sample is capped. It intentionally omits ratings, target prices, and investment implications.
 - Sends only verified, claim-usable article data to the language model.
 - Requires structured JSON with article ID citations.
 - Removes any rendered claim that has no valid citation.

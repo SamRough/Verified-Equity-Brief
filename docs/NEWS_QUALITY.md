@@ -8,9 +8,9 @@ Verified Equity Brief is a source-verifiable news intelligence workflow. It is n
 
 1. Finance APIs provide broad recall: Marketaux, Alpha Vantage, and Yahoo Finance.
 2. Sina Finance individual-security pages provide a dated supplemental feed for US, Hong Kong, and A-share tickers.
-3. Tavily, SerpAPI, and the optional Google News RSS discovery route are candidate-only retrieval layers. They do not establish article dates or claim eligibility by themselves. Google RSS is enabled only with an explicit local personal-demo flag; decoded URLs must be original publishers and pass all normal gates.
-4. A source must pass the serious-source allowlist, company relevance test, article-level noise rules, and selected-date-window test before it can support a claim.
-5. Similar headline events are clustered before the LLM sees them. Selection is capped per event and per publisher to reduce syndicated-news repetition.
+3. Tavily, SerpAPI, and the optional Google News RSS discovery route are candidate-only retrieval layers. They do not establish article dates or claim eligibility by themselves. Google RSS is enabled only with an explicit local personal-demo flag; a decoded URL must match the RSS publisher domain and pass all normal gates.
+4. A source must pass the serious-source allowlist, direct issuer-in-headline relevance test, article-level noise rules, and selected-date-window test before it can support a claim.
+5. Similar headline events are clustered before the LLM sees them. The rendered feed retains every distinct publisher/event pair; only the smaller editorial sample is diversified and capped to reduce LLM repetition.
 6. Provider diagnostics distinguish `used`, `empty`, `skipped`, and `failed`; a configured API key never appears as a successful search when it returned no articles or the provider rejected the request.
 7. Brief language never narrows the evidence pool. Chinese and English rendering both use the same date-verified, tier-qualified source set; locale-specific discovery queries only broaden recall.
 

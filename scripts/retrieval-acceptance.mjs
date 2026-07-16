@@ -7,25 +7,38 @@ const cases = [
   { query: "贵州茅台", language: "zh" },
 ];
 
-function inLastSevenDays(date) {
+function inSelectedRange(date, range) {
   if (!date || !/^20\d{2}-\d{2}-\d{2}$/.test(date)) return false;
   const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6));
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (range === "week") {
+    const offset = (start.getUTCDay() + 6) % 7;
+    start.setUTCDate(start.getUTCDate() - offset);
+  } else if (range === "last7") {
+    start.setUTCDate(start.getUTCDate() - 6);
+  } else if (range === "last30") {
+    start.setUTCDate(start.getUTCDate() - 29);
+  }
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
   const value = new Date(`${date}T00:00:00Z`);
   return value >= start && value < end;
 }
 
 function allClaims(brief) {
-  return [
-    ...brief.executiveSummary,
-    ...brief.investmentImplications.positiveFactors,
-    ...brief.investmentImplications.negativeFactors,
-    ...brief.investmentImplications.watchItems,
-  ];
+  return brief.executiveSummary;
 }
 
-function validateBrief(brief) {
+function publisherHostsMatch(articleUrl, publisherUrl) {
+  try {
+    const articleHost = new URL(articleUrl).hostname.replace(/^www\./i, "").toLowerCase();
+    const publisherHost = new URL(publisherUrl).hostname.replace(/^www\./i, "").toLowerCase();
+    return articleHost === publisherHost || articleHost.endsWith(`.${publisherHost}`) || publisherHost.endsWith(`.${articleHost}`);
+  } catch {
+    return false;
+  }
+}
+
+function validateBrief(brief, range) {
   const failures = [];
   const invalidSuccessDiagnostic = brief.searchDiagnostics.some(
     (item) => item.status === "used" && item.resultCount === 0,
@@ -45,9 +58,12 @@ function validateBrief(brief) {
   if (brief.sources.length === 0) failures.push("successful brief has no sources");
   if (brief.sources.some((source) => !source.usableForClaims)) failures.push("successful brief contains unusable source");
   if (brief.sources.some((source) => source.sourceTier > 2)) failures.push("successful brief relies on Tier 3 source");
-  if (brief.sources.some((source) => !inLastSevenDays(source.publishedDate))) failures.push("successful brief contains out-of-window date");
+  if (brief.sources.some((source) => !inSelectedRange(source.publishedDate, range))) failures.push("successful brief contains out-of-window date");
   if (brief.sources.some((source) => source.searchMode === "Google News RSS" && /(^|\.)google\.com\b/i.test(new URL(source.url).hostname))) {
     failures.push("Google RSS source was not decoded to the original publisher");
+  }
+  if (brief.sources.some((source) => source.searchMode === "Google News RSS" && (!source.publisherUrl || !publisherHostsMatch(source.url, source.publisherUrl)))) {
+    failures.push("Google RSS article URL does not match its RSS publisher");
   }
   const eventPublisherPairs = brief.sources.map((source) => `${source.eventClusterId}|${source.source}`);
   if (new Set(eventPublisherPairs).size !== eventPublisherPairs.length) {
@@ -66,6 +82,9 @@ function validateBrief(brief) {
   if (brief.sources.some((source) => !brief.keyNews.some((item) => item.sourceLink === source.url))) {
     failures.push("verified source was omitted from the news list");
   }
+  if (brief.keyNews.some((item) => item.date !== brief.sources.find((source) => source.url === item.sourceLink)?.publishedDate)) {
+    failures.push("news item date does not match its retrieved source");
+  }
   return failures;
 }
 
@@ -79,7 +98,7 @@ for (const testCase of cases) {
     signal: AbortSignal.timeout(120000),
   });
   const brief = await response.json();
-  const failures = response.ok ? validateBrief(brief) : [brief.error ?? `HTTP ${response.status}`];
+  const failures = response.ok ? validateBrief(brief, "last7") : [brief.error ?? `HTTP ${response.status}`];
   const outcome = failures.length === 0 ? "PASS" : "FAIL";
   console.log(`${outcome} | ${testCase.query} | ${brief.status} | ${brief.sourceVerification?.articlesUsed ?? 0} verified sources`);
   completedBriefs.set(`${testCase.query}:${testCase.language}`, brief);
@@ -106,6 +125,23 @@ if (!englishTencent) {
     failed = true;
     console.log("FAIL | Tencent language parity | English request failed");
   }
+}
+
+// The date-window filter is a core accuracy invariant, not a 7-day-only rule.
+const windowResponse = await fetch(`${baseUrl}/api/brief`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ query: "Tencent", language: "en", range: "last30" }),
+  signal: AbortSignal.timeout(120000),
+});
+const windowBrief = await windowResponse.json();
+const windowFailures = windowResponse.ok ? validateBrief(windowBrief, "last30") : [windowBrief.error ?? `HTTP ${windowResponse.status}`];
+if (windowFailures.length) {
+  failed = true;
+  console.log("FAIL | Tencent last30 | date-window validation failed");
+  for (const failure of [...new Set(windowFailures)]) console.log(`  - ${failure}`);
+} else {
+  console.log(`PASS | Tencent last30 | ${windowBrief.sourceVerification?.articlesUsed ?? 0} verified sources`);
 }
 
 if (chineseTencent?.status === "ok" && englishTencent?.status === "ok") {

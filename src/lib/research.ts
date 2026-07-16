@@ -97,6 +97,7 @@ type CompanyContext = {
 type RawResult = {
   title: string;
   url: string;
+  publisherUrl?: string;
   snippet: string;
   content: string;
   publishedDate: string | null;
@@ -116,6 +117,7 @@ type GoogleNewsRssItem = {
 
 type GoogleNewsDecodeResult = {
   status?: boolean;
+  source_url?: string;
   decoded_url?: string;
   message?: string;
 };
@@ -1240,7 +1242,22 @@ function buildEventClusters(articles: Article[], language: BriefLanguage): Event
     });
 }
 
-function diversifyArticlesByEvent(articles: Article[], limit: number) {
+function retainDistinctArticleCoverage(articles: Article[]) {
+  const retained: Article[] = [];
+  const seenEventPublisher = new Set<string>();
+
+  for (const article of articles) {
+    const event = article.eventClusterId || eventKey(article);
+    const key = `${event}|${article.source.toLowerCase()}`;
+    if (seenEventPublisher.has(key)) continue;
+    seenEventPublisher.add(key);
+    retained.push(article);
+  }
+
+  return retained;
+}
+
+function selectEditorialArticles(articles: Article[], limit: number) {
   const selected: Article[] = [];
   const eventCounts = new Map<string, number>();
   const sourceCounts = new Map<string, number>();
@@ -1379,12 +1396,10 @@ function isRelevantForCategory(article: Article, company = buildCompanyContext("
   if (isGenericSourcePage(article)) return false;
   if (isNonCoreFinancialNoise(article)) return false;
   const titleMention = directCompanyMentionInTitle(article, company);
-  const titleOrSnippetMention = directCompanyMentionInTitleOrSnippet(article, company);
-  if (!titleOrSnippetMention) return false;
-  // Some financial wires place the issuer in the deck rather than the headline.
-  // Accept that only from a stronger publisher and only with a clear entity score.
-  if (!titleMention && article.sourceTier === 3) return false;
-  if (companyRelevanceScore(article, company) < (titleMention ? 4 : 6)) return false;
+  // A company mentioned only in the article deck is commonly a passive investor,
+  // customer, or comparison point. That is not reliable enough for an issuer feed.
+  if (!titleMention) return false;
+  if (companyRelevanceScore(article, company) < 4) return false;
   if (!isFinancialNewsEvent(article, company)) return false;
   return true;
 }
@@ -2465,10 +2480,36 @@ async function decodeGoogleNewsUrls(urls: string[]) {
   // This package only transforms Google News redirect URLs to their publisher URLs.
   // It does not supply article content or bypass the downstream admission checks.
   const { GoogleDecoder } = require("google-news-url-decoder") as {
-    GoogleDecoder: new () => { decodeBatch: (sourceUrls: string[]) => Promise<GoogleNewsDecodeResult[]> };
+    GoogleDecoder: new () => {
+      decodeBatch: (sourceUrls: string[]) => Promise<GoogleNewsDecodeResult[]>;
+      decode: (sourceUrl: string) => Promise<GoogleNewsDecodeResult>;
+    };
   };
   const decoder = new GoogleDecoder();
   return decoder.decodeBatch(urls);
+}
+
+function hostnameForUrl(url: string | null | undefined) {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function decodedUrlMatchesPublisher(decodedUrl: string, publisherUrl: string | null) {
+  const decodedHost = hostnameForUrl(decodedUrl);
+  const publisherHost = hostnameForUrl(publisherUrl);
+  if (!decodedHost || !publisherHost) return false;
+  return decodedHost === publisherHost || decodedHost.endsWith(`.${publisherHost}`) || publisherHost.endsWith(`.${decodedHost}`);
+}
+
+async function decodeGoogleNewsUrl(url: string) {
+  const { GoogleDecoder } = require("google-news-url-decoder") as {
+    GoogleDecoder: new () => { decode: (sourceUrl: string) => Promise<GoogleNewsDecodeResult> };
+  };
+  return new GoogleDecoder().decode(url);
 }
 
 async function searchWithGoogleNewsRss(
@@ -2499,9 +2540,31 @@ async function searchWithGoogleNewsRss(
         .slice(0, plan.maxResults ?? 12);
       if (items.length === 0) return [];
       const decoded = await decodeGoogleNewsUrls(items.map((item) => item.googleUrl));
+      const batchUrlByGoogleUrl = new Map(
+        decoded.flatMap((result) =>
+          result.status && result.source_url && result.decoded_url ? [[result.source_url, result.decoded_url] as const] : [],
+        ),
+      );
+      const resolvedUrls = await runSettledInBatches(
+        items,
+        async (item) => {
+          const batchUrl = batchUrlByGoogleUrl.get(item.googleUrl);
+          if (batchUrl && decodedUrlMatchesPublisher(batchUrl, item.publisherUrl)) return batchUrl;
+
+          // Google may return batch responses in an order that differs from the
+          // request. Re-decode only mismatches; never pair a headline to a URL
+          // whose original publisher disagrees with the RSS publisher record.
+          const single = await decodeGoogleNewsUrl(item.googleUrl);
+          return single.status && single.decoded_url && decodedUrlMatchesPublisher(single.decoded_url, item.publisherUrl)
+            ? single.decoded_url
+            : null;
+        },
+        2,
+      );
 
       return items.flatMap((item, index) => {
-        const url = decoded[index]?.status ? decoded[index]?.decoded_url : null;
+        const result = resolvedUrls[index];
+        const url = result.status === "fulfilled" ? result.value : null;
         if (!url) return [];
         const category = categoryForUrl(url, plan.category);
         if (!isAllowedUrl(url, category, searchLocale)) return [];
@@ -2509,6 +2572,7 @@ async function searchWithGoogleNewsRss(
         return [{
           title: item.title,
           url,
+          publisherUrl: item.publisherUrl ?? undefined,
           snippet: item.snippet,
           content: item.snippet.slice(0, 800),
           publishedDate: item.publishedDate,
@@ -2698,6 +2762,7 @@ async function normalizeAndFilterResults(
       id: articles.length + 1,
       title: result.title.trim(),
       url,
+      publisherUrl: result.publisherUrl ? normalizeUrl(result.publisherUrl) : undefined,
       source: sourceFromUrl(url),
       sourceTier: tier.tier,
       sourceTierLabel: tier.label,
@@ -2788,7 +2853,9 @@ async function normalizeAndFilterResults(
     .sort((a, b) => sourcePriority(b, language, company) - sourcePriority(a, language, company));
 
   const clustered = assignEventClusters(filteredBeforeDiversification, language, company);
-  const filtered = diversifyArticlesByEvent(clustered, 24)
+  // The feed retains every distinct publisher/event pair. Editorial selection
+  // happens later, so an LLM context limit never hides verified source links.
+  const filtered = retainDistinctArticleCoverage(clustered)
     .map((article, index) => ({ ...article, id: index + 1 }));
   const eventClusters = buildEventClusters(filtered, language);
 
@@ -3283,6 +3350,8 @@ export async function generateBrief(query: string, range: TimeRange, language: B
     counts[article.category] = (counts[article.category] ?? 0) + 1;
     return counts;
   }, {});
+  const editorialArticles = selectEditorialArticles(usableArticles, 20);
+  const editorialEventClusters = buildEventClusters(editorialArticles, language);
 
   if (usableArticles.length === 0) {
     return {
@@ -3353,7 +3422,7 @@ export async function generateBrief(query: string, range: TimeRange, language: B
   const selectedPeriod = briefPeriodDescription(range, language);
   const aiKeyNewsLimit = aiKeyNewsAnnotationLimit(range);
 
-  const articlePayload = usableArticles.map((article) => ({
+  const articlePayload = editorialArticles.map((article) => ({
     id: article.id,
     title: article.title,
     source: article.source,
@@ -3378,7 +3447,7 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       body: JSON.stringify({
         model,
         temperature: 0.1,
-        max_tokens: 2800,
+        max_tokens: 2200,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -3404,7 +3473,6 @@ export async function generateBrief(query: string, range: TimeRange, language: B
                 "Executive summary must have 3 to 5 bullets, each with citations.",
                 "Keep the brief concise: executive bullets under 35 words, key news summaries under 55 words, why-it-matters under 45 words.",
                 `Return no more than ${aiKeyNewsLimit} editorial keyNews annotations. The application will display every verified article separately.`,
-                "Return no more than 2 bullets for each follow-up bucket.",
                 "Key news items must come directly from supplied articles, cover different event clusters when possible, and represent earlier as well as later material events when the selected window is longer than seven days.",
                 "Prefer Tier 1 and Tier 2 sources when selecting key news. Use Tier 3 only when the item is clearly relevant and no stronger source covers the same event.",
                 "Focus on newsworthy events reported by financial media. Do not treat filings, PDFs, stock quote pages, company profile pages, or broker target-price tables as news.",
@@ -3426,14 +3494,9 @@ export async function generateBrief(query: string, range: TimeRange, language: B
                     sentiment: "Positive | Neutral | Negative",
                   },
                 ],
-                investmentImplications: {
-                  positiveFactors: [{ text: "string", citations: [1] }],
-                  negativeFactors: [{ text: "string", citations: [1] }],
-                  watchItems: [{ text: "string", citations: [1] }],
-                },
               },
               articles: articlePayload,
-              eventClusters: usableEventClusters,
+              eventClusters: editorialEventClusters,
             }),
           },
         ],
@@ -3534,9 +3597,9 @@ export async function generateBrief(query: string, range: TimeRange, language: B
       });
     }
   }
-  const executiveSummary = cleanBullets(parsed.executiveSummary, usableArticles, 5).slice(0, 5);
-  const implications = cleanImplications(parsed.investmentImplications, usableArticles);
-  const articleById = new Map(usableArticles.map((article) => [article.id, article]));
+  const executiveSummary = cleanBullets(parsed.executiveSummary, editorialArticles, 5).slice(0, 5);
+  const implications = cleanImplications(parsed.investmentImplications, editorialArticles);
+  const articleById = new Map(editorialArticles.map((article) => [article.id, article]));
 
   const annotatedKeyNews = new Map<number, KeyNewsItem>();
   if (Array.isArray(parsed.keyNews)) {

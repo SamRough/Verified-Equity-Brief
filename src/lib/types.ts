@@ -23,6 +23,7 @@ export type Article = {
   id: number;
   title: string;
   url: string;
+  publisherUrl?: string;
   source: string;
   sourceTier: SourceTier;
   sourceTierLabel: string;
